@@ -165,7 +165,7 @@ function getCabinetListFromParams_() {
   for (let i = 0; i < rows.length; i++) {
     const name = String(rows[i][0] || '').trim();               // A Кабинет
     const plat = String(rows[i][3] || '').trim().toUpperCase(); // D Площадка
-    if (!name) break; // до первой пустой строки
+    if (!name) continue; // пропускаем пустые разделители
 
     if (filterUP) {
       if (plat === filterUP) out.push(name);
@@ -538,7 +538,9 @@ function applyNumberFormatsRUAB_(sh, rowsLen) {
 
 /********************* ИСТОЧНИК «ФИЗ. ОБОРОТ» *******************/
 
-/** Для калькулятора: читаем A:G и возвращаем Map(key -> данные), где key = "Кабинет␟Артикул" */
+/** Для калькулятора: читаем A:E и возвращаем Map(key -> данные), где key = "Кабинет␟Артикул"
+ *  НОВАЯ РАЗМЕТКА: A=Кабинет, B=Артикул, C=Остаток(E), D=В поставке(F), E=Скорость(G)
+ */
 function readPhysMapForCabinet_(physSheetName) {
   const ss = SpreadsheetApp.getActive();
   const sh = ss.getSheetByName(physSheetName);
@@ -547,37 +549,50 @@ function readPhysMapForCabinet_(physSheetName) {
 
   const lastRow = sh.getLastRow();
   const lastCol = sh.getLastColumn();
-  if (lastRow < 2 || lastCol < 7) return map;
+  // нужно минимум A:E
+  if (lastRow < 2 || lastCol < 5) return map;
 
-  // Берём и значения, и дисплей (для G — скорость с форматом скобок)
-  const vals = sh.getRange(2, 1, lastRow - 1, 7).getValues();          // A:G raw
-  const disp = sh.getRange(2, 1, lastRow - 1, 7).getDisplayValues();   // A:G display
+  // Берём и raw, и display (скорость нам нужна как строка из E, плюс числовое значение)
+  const vals = sh.getRange(2, 1, lastRow - 1, 5).getValues();        // A:E raw
+  const disp = sh.getRange(2, 1, lastRow - 1, 5).getDisplayValues(); // A:E display
+
+  // помощник: "умная" конверсия строки/числа с запятыми
+  const toNum = (REF && REF.toNumber) ? REF.toNumber : function (v) {
+    const n = Number(String(v).replace(',', '.'));
+    return isFinite(n) ? n : 0;
+  };
 
   for (var i = 0; i < vals.length; i++) {
     const rowV = vals[i], rowD = disp[i];
-    const cab = String(rowV[0] || '').trim();
-    const art = String(rowV[1] || '').trim();
+
+    const cab = String(rowV[0] || '').trim(); // A
+    const art = String(rowV[1] || '').trim(); // B
     if (!cab || !art) continue;
 
     const key = (REF && REF.makeSSKey) ? REF.makeSSKey(cab, art) : (cab + '␟' + art);
 
-    const toNum = (REF && REF.toNumber) ? REF.toNumber : function (v){ var n=Number(String(v).replace(',','.')); return isFinite(n)?n:0; };
+    // НОВЫЕ индексы (сдвиг на 2 колонки влево):
+    // C -> remain, D -> inSupp, E -> speed
+    const remainENum = toNum(rowD[2]);          // C
+    const inSuppFNum = toNum(rowD[3]);          // D
+    const speedDispG = String(rowD[4] || '');   // E (display)
+    const speedNumG  = toNum(rowD[4]);          // E (numeric)
 
-    const stockCNum  = toNum(rowD[2]); // C
-    const inWayDNum  = toNum(rowD[3]); // D
-    const remainENum = toNum(rowD[4]); // E
-    const inSuppFNum = toNum(rowD[5]); // F
-
-    const speedDispG = String(rowD[6] || ''); // G display
-    const speedNumG  = toNum(rowD[6]);        // G numeric
+    // Полевые C/D из старой схемы нам больше не нужны → зафиксируем нулями,
+    // чтобы не ломать существующие обращения из остального кода.
+    const stockCNum  = 0;
+    const inWayDNum  = 0;
 
     map.set(key, {
-      stockCNum, inWayDNum, remainENum, inSuppFNum,
+      stockCNum, inWayDNum,       // исторические поля, оставлены для совместимости
+      remainENum, inSuppFNum,
       speedDispG, speedNumG
     });
   }
+
   return map;
 }
+
 
 
 /********************* ХЕЛПЕРЫ И УТИЛИТЫ ************************/
