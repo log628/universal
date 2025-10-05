@@ -11,23 +11,22 @@ var REF = (function () {
   /* =========================
    *        Л И С Т Ы
    * ========================= */
-// ===== Листы (OZ/WB отдельно) =====
-REF.SHEETS = {
-  ARTS_OZ: '[OZ] Артикулы',
-  ARTS_WB: '[WB] Артикулы',
-  FIZ_OZ:  '[OZ] Физ. оборот',
-  FIZ_WB:  '[WB] Физ. оборот',
+  REF.SHEETS = {
+    ARTS_OZ: '[OZ] Артикулы',
+    ARTS_WB: '[WB] Артикулы',
+    FIZ_OZ:  '[OZ] Физ. оборот',
+    FIZ_WB:  '[WB] Физ. оборот',
 
-  PARAMS:  '⚙️ Параметры',
-  RATES:   '🔖 Тарифы',
-  SS:      '🍔 СС',
+    PARAMS:  '⚙️ Параметры',
+    RATES:   '🔖 Тарифы',
+    SS:      '🍔 СС',
 
-  // ✅ Единое имя листа калькулятора
-  CALC:    '⚖️ Калькулятор'
-};
+    // ✅ Единое имя листа калькулятора
+    CALC:    '⚖️ Калькулятор'
+  };
 
-// ✅ Единый A1-диапазон контрола выбора кабинета
-REF.CTRL_RANGE_A1 = 'B3:E4';
+  // ✅ Контрол выбора кабинета — ИМЕНОВАННЫЙ ДИАПАЗОН
+  REF.CTRL_RANGE_A1 = 'muff_cabs';
 
   /* =========================
    *  К У Л Д А У Н / З А Н Я Т О
@@ -167,46 +166,39 @@ REF.CTRL_RANGE_A1 = 'B3:E4';
   /* =========================
    *     Ц В Е Т А  К А Б И Н Е Т О В
    * ========================= */
+  REF.readCabinetColorMap = function (platform /* 'OZON'|'WB'|'WILDBERRIES'|'OZ' */) {
+    var ss = SpreadsheetApp.getActive();
+    var sh = ss.getSheetByName(REF.SHEETS.PARAMS);
+    var map = new Map();
+    if (!sh) return map;
 
- // В REF (refs.gs) замените readCabinetColorMap на эту версию:
-REF.readCabinetColorMap = function (platform /* 'OZON'|'WB'|'WILDBERRIES'|'OZ' */) {
-  var ss = SpreadsheetApp.getActive();
-  var sh = ss.getSheetByName(REF.SHEETS.PARAMS);
-  var map = new Map();
-  if (!sh) return map;
+    var last = sh.getLastRow();
+    if (last < 2) return map;
 
-  var last = sh.getLastRow();
-  if (last < 2) return map;
+    var want = String(platform||'').trim().toUpperCase();
+    if (want === 'OZ') want = 'OZON';
+    if (want === 'WB') want = 'WILDBERRIES';
 
-  // Приводим площадку к каноническому виду
-  var want = String(platform||'').trim().toUpperCase();
-  if (want === 'OZ') want = 'OZON';
-  if (want === 'WB') want = 'WILDBERRIES';
+    var names   = sh.getRange(2, 1, last - 1, 1).getDisplayValues(); // A
+    var plats   = sh.getRange(2, 4, last - 1, 1).getDisplayValues(); // D
+    var bgFills = sh.getRange(2, 7, last - 1, 1).getBackgrounds();   // G
 
-  // Читаем сразу нужные колонки: A (кабинет), D (площадка), G (цвет)
-  var names   = sh.getRange(2, 1, last - 1, 1).getDisplayValues(); // A
-  var plats   = sh.getRange(2, 4, last - 1, 1).getDisplayValues(); // D
-  var bgFills = sh.getRange(2, 7, last - 1, 1).getBackgrounds();   // G
+    for (var i = 0; i < names.length; i++) {
+      var cab  = String(names[i][0] || '').trim();
+      var plat = String(plats[i][0] || '').trim().toUpperCase();
+      var hex  = String(bgFills[i][0] || '').trim() || '#ffffff';
+      if (!cab) continue;
 
-  for (var i = 0; i < names.length; i++) {
-    var cab  = String(names[i][0] || '').trim();
-    var plat = String(plats[i][0] || '').trim().toUpperCase();
-    var hex  = String(bgFills[i][0] || '').trim() || '#ffffff';
-    if (!cab) continue;
+      if (want) {
+        var isOZ = (plat === 'OZON' || plat === 'OZ');
+        var isWB = (plat === 'WILDBERRIES' || plat === 'WB');
+        if ((want === 'OZON' && !isOZ) || (want === 'WILDBERRIES' && !isWB)) continue;
+      }
 
-    // КЛЮЧЕВОЕ: сперва фильтр по площадке
-    if (want) {
-      var isOZ = (plat === 'OZON' || plat === 'OZ');
-      var isWB = (plat === 'WILDBERRIES' || plat === 'WB');
-      if ((want === 'OZON' && !isOZ) || (want === 'WILDBERRIES' && !isWB)) continue;
+      if (!map.has(cab)) map.set(cab, hex);
     }
-
-    // Первое попадание выигрывает
-    if (!map.has(cab)) map.set(cab, hex);
-  }
-  return map;
-};
-
+    return map;
+  };
 
   /* =========================
    *   К Л ю ч  и  С С  (legacy)
@@ -258,8 +250,6 @@ REF.readCabinetColorMap = function (platform /* 'OZON'|'WB'|'WILDBERRIES'|'OZ' *
   /* =========================
    *      WB токены из «⚙️ Параметры»
    * ========================= */
-  // A=Кабинет, B=Тип токена, C=API KEY, D=Площадка
-  // Роли: prices | content | stats | supplies | any
   REF.buildWBTokenMapFromParams = function () {
     var ss = SpreadsheetApp.getActive();
     var sh = ss.getSheetByName(REF.SHEETS.PARAMS);
@@ -458,12 +448,7 @@ REF.readCabinetColorMap = function (platform /* 'OZON'|'WB'|'WILDBERRIES'|'OZ' *
     return s === 'симкарты';
   };
 
-  /** Универсальный резолвер СС:
-   *  1) tovar = article.slice(3) без "_cat<d>"
-   *  2) cc = map[tovar].cc
-   *  3) если cc<=0 и (ownCategory=="Симкарты" или tovar startsWith "sim0"):
-   *       cc = readSimkaBase()*2
-   */
+  /** Универсальный резолвер СС */
   REF.resolveCCForArticle = function (platform, article, ownCategory, ssAJMap) {
     var map = ssAJMap || REF.readSS_AJ_Map();
     var tovar = REF.toTovarFromArticle(platform, article);
@@ -481,11 +466,167 @@ REF.readCabinetColorMap = function (platform /* 'OZON'|'WB'|'WILDBERRIES'|'OZ' *
     return 0;
   };
 
-REF.normCabinet = function (s) {
-  return String(s == null ? '' : s)
-    .replace(/[\u00A0\u2007\u202F]/g, ' ') // NBSP, figure space, narrow no-break
-    .replace(/\s+/g, ' ')                  // схлопываем кратные пробелы
-    .trim();
+  REF.normCabinet = function (s) {
+    return String(s == null ? '' : s)
+      .replace(/[\u00A0\u2007\u202F]/g, ' ') // NBSP, figure space, narrow no-break
+      .replace(/\s+/g, ' ')                  // схлопываем кратные пробелы
+      .trim();
+  };
+
+  /* =========================
+   *  ⚙️ Параметры: A:E + платформа
+   * ========================= */
+
+  // A..E: A=Кабинет, B=Тип токена/Роль, C=API KEY, D=Площадка, E=Краткое название
+  REF.PARAMS_COLS = { CABINET:1, TOKEN_ROLE:2, API_KEY:3, PLATFORM:4, SHORT:5 };
+
+  // Удобные ярлыки
+  REF.PARAMS_RANGE_AE     = 'A:E';
+  REF.PARAMS_SHORT_COL_A1 = 'E:E';
+
+  // ⚠️ Платформа читается из ИМЕНОВАННОГО диапазона 'muff_mp'
+  REF.PARAMS_PLATFORM_A1  = 'muff_mp';
+
+  // Канонизация тэга платформы
+  REF.platformCanon = function (p) {
+    var raw = String(p||'').trim().toUpperCase();
+    if (raw === 'OZON' || raw === 'OZ') return 'OZ';
+    if (raw === 'WILDBERRIES' || raw === 'WB') return 'WB';
+    return null;
+  };
+
+  // Универсальный геттер текущей платформы → 'OZ' | 'WB' | null
+  REF.getCurrentPlatform = function () {
+    var ss = SpreadsheetApp.getActive();
+    var raw = '';
+    try {
+      raw = String(ss.getRangeByName(REF.PARAMS_PLATFORM_A1).getDisplayValue() || '').trim().toUpperCase();
+    } catch (_) {
+      try { raw = String(ss.getSheetByName(REF.SHEETS.PARAMS).getRange('I2').getDisplayValue() || '').trim().toUpperCase(); } catch(__){}
+    }
+    return REF.platformCanon(raw);
+  };
+
+  // Текущий выбранный кабинет из контрола (именованный диапазон muff_cabs)
+  REF.getCabinetControlValue = function () {
+    var ss = SpreadsheetApp.getActive();
+    try {
+      var rng = ss.getRangeByName(REF.CTRL_RANGE_A1);
+      return String(rng && rng.getDisplayValue ? (rng.getDisplayValue() || '') : '').trim();
+    } catch (_) { return ''; }
+  };
+  REF.getCabinetControlRange = function () {
+    var ss = SpreadsheetApp.getActive();
+    try { return ss.getRangeByName(REF.CTRL_RANGE_A1); } catch(_) { return null; }
+  };
+
+  /**
+   * Map<Кабинет -> КраткоеНазвание>, с опц. фильтром по площадке
+   */
+  REF.readCabinetShortNameMap = function (platform) {
+    var ss = SpreadsheetApp.getActive();
+    var sh = ss.getSheetByName(REF.SHEETS.PARAMS);
+    var map = new Map();
+    if (!sh) return map;
+
+    var last = sh.getLastRow();
+    if (last < 2) return map;
+
+    var want = String(platform||'').trim().toUpperCase();
+    if (want === 'OZ') want = 'OZON';
+    if (want === 'WB') want = 'WILDBERRIES';
+
+    var names = sh.getRange(2, REF.PARAMS_COLS.CABINET,  last - 1, 1).getDisplayValues(); // A
+    var plats = sh.getRange(2, REF.PARAMS_COLS.PLATFORM, last - 1, 1).getDisplayValues(); // D
+    var shorts= sh.getRange(2, REF.PARAMS_COLS.SHORT,    last - 1, 1).getDisplayValues(); // E
+
+    for (var i=0;i<names.length;i++){
+      var cabRaw   = String(names[i][0]  || '').trim();
+      var platRaw  = String(plats[i][0]  || '').trim().toUpperCase();
+      var shortRaw = String(shorts[i][0] || '').trim();
+      if (!cabRaw) continue;
+
+      if (want) {
+        var isOZ = (platRaw === 'OZON' || platRaw === 'OZ');
+        var isWB = (platRaw === 'WILDBERRIES' || platRaw === 'WB');
+        if ((want === 'OZON' && !isOZ) || (want === 'WILDBERRIES' && !isWB)) continue;
+      }
+
+      var key = REF.normCabinet(cabRaw);
+      var val = shortRaw || cabRaw;
+      if (!map.has(key)) map.set(key, val);
+    }
+    return map;
+  };
+
+  REF.getCabinetShortName = function (cabinet, platform) {
+    var key = REF.normCabinet(cabinet);
+    if (!key) return '';
+    var map = REF.readCabinetShortNameMap(platform);
+    return map.get(key) || key;
+  };
+
+  /* =========================
+   *  Л О Г Г Е Р  S:U (⚙️ Параметры)
+   * ========================= */
+  // Колонки: S=19 (Обновления), T=20 (Время), U=21 (Кабинеты)
+// platformHint: 'OZON' | 'WILDBERRIES' | 'OZ' | 'WB' | undefined
+REF.logRun = function (opLabel, cabinetsArray, platformHint) {
+  try {
+    var ss = SpreadsheetApp.getActive();
+    var sh = ss.getSheetByName(REF.SHEETS.PARAMS);
+    if (!sh) return;
+
+    var last = sh.getLastRow();
+    if (last < 2) return;
+
+    // Найти строку операции в S
+    var ops = sh.getRange(2, 19, last - 1, 1).getDisplayValues(); // S
+    var rowIndex = -1;
+    for (var i = 0; i < ops.length; i++) {
+      if (String(ops[i][0] || '').trim() === String(opLabel || '').trim()) { rowIndex = i + 2; break; }
+    }
+    if (rowIndex === -1) return;
+
+    // Формат времени: dd.MM HH:mm (с ведущими нулями)
+    var tz = ss.getSpreadsheetTimeZone() || 'Etc/GMT';
+    var stamp = Utilities.formatDate(new Date(), tz, 'dd.MM HH:mm');
+
+    // Если есть platformHint — нормализуем и используем как фильтр читателя кратких имён
+    var want = String(platformHint || '').trim().toUpperCase();
+    if (want === 'OZ') want = 'OZON';
+    if (want === 'WB') want = 'WILDBERRIES';
+
+    var seen = new Set(), out = [];
+    var arr = Array.isArray(cabinetsArray) ? cabinetsArray : (cabinetsArray ? [cabinetsArray] : []);
+
+    // Карта кратких имен с опциональным фильтром по площадке
+    var shortMap = REF.readCabinetShortNameMap(want || undefined);
+
+    for (var k = 0; k < arr.length; k++) {
+      var full = REF.normCabinet(arr[k]);
+      if (!full) continue;
+
+      // Если фильтр задан — возьмём из карты с фильтром.
+      // Если по каким-то причинам не нашли, используем исходное имя.
+      var shortName = shortMap.get(full);
+      if (!shortName) {
+        // Фолбэк: без фильтра (на случай, если в Params нет строки с такой площадкой)
+        shortName = REF.getCabinetShortName(full, undefined) || full;
+      }
+
+      if (!seen.has(shortName)) {
+        seen.add(shortName);
+        out.push(shortName);
+      }
+    }
+
+    sh.getRange(rowIndex, 20).setValue(stamp);     // T (Время)
+    sh.getRange(rowIndex, 21).setValue(out.join(', ')); // U (Кабинеты)
+  } catch (_){}
 };
+
+
+
   return REF;
 })();

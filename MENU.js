@@ -1,17 +1,19 @@
 /** =========================
- *  Меню площадки (централизовано)
+ *  Меню: Обновить выгрузку  +  [Сменить площадку]
  * ========================= */
 
 const PARAMS_I2_A1 = 'I2';
 
 function onOpen() {
   try { if (typeof setupCabinetControl_ === 'function') setupCabinetControl_(); } catch (_) {}
-  buildPlatformMenu_();
+  buildRefreshMenu_();            // ← новое меню с подпунктами
+  buildPlatformMenuBrackets_();   // ← старое меню переключателя, но с названием [Сменить площадку]
 }
 
-function buildPlatformMenu_() {
+/** ========== [Сменить площадку] (как у тебя, только другой заголовок) ========== */
+function buildPlatformMenuBrackets_() {
   const ui = SpreadsheetApp.getUi();
-  const menu = ui.createMenu('Сменить площадку');
+  const menu = ui.createMenu('[Сменить площадку]');
 
   const ss = SpreadsheetApp.getActive();
   const shParams = ss.getSheetByName(REF.SHEETS.PARAMS);
@@ -59,15 +61,12 @@ function menuTogglePlatform_() {
     ctrl.setValue(firstCab);
     SpreadsheetApp.flush();
 
-    // мгновенный рендер текущей площадки
     try {
       if (typeof runLayoutImmediate === 'function') {
         runLayoutImmediate(firstCab);
       } else if (typeof runLayoutWithDropdownCooldown === 'function') {
-        // мягкий фолбэк на старый раннер
         runLayoutWithDropdownCooldown(firstCab);
       } else {
-        // последний фолбэк — прямой вызов layout'ов
         if (typeof layoutCalculator === 'function') layoutCalculator(firstCab);
         if (typeof layoutParallel   === 'function') layoutParallel(firstCab);
       }
@@ -78,7 +77,7 @@ function menuTogglePlatform_() {
     ss.toast(`Для площадки ${next} не найден ни один кабинет в «${REF.SHEETS.PARAMS}».`, 'Внимание', 5);
   }
 
-  buildPlatformMenu_();
+  buildPlatformMenuBrackets_();
   ss.toast(`Площадка: ${next}${firstCab ? ' — ' + firstCab : ''}`, 'Готово', 3);
 }
 
@@ -105,4 +104,56 @@ function normalizePlatform_(raw) {
   if (/^(ozon|oz)$/i.test(s)) return 'OZON';
   if (/^(wildberries|wb)$/i.test(s)) return 'WILDBERRIES';
   return null;
+}
+
+/** ========== Обновить выгрузку (НОВОЕ меню с точными пунктами) ========== */
+function buildRefreshMenu_() {
+  const ui = SpreadsheetApp.getUi();
+  const m  = ui.createMenu('Обновить выгрузку');
+
+  m
+    // 🆔 Артикулы
+    .addItem('🆔 Артикулы: Ozon',        'menuRefresh_Arts_OZ_')
+    .addItem('🆔 Артикулы: Wildberries', 'menuRefresh_Arts_WB_')
+    .addSeparator()
+    // 📦 Физ. обороты
+    .addItem('📦 Физ. обороты: Ozon',        'menuRefresh_Phys_OZ_')
+    .addItem('📦 Физ. обороты: Wildberries', 'menuRefresh_Phys_WB_')
+    .addSeparator()
+    // 🍔 Склад и Себестоимости
+    .addItem('🍔 Склад и Себестоимости', 'menuRefresh_Import_Sklad_')
+    .addToUi();
+}
+
+/** ==== Хэндлеры пунктов (прямые вызовы твоих функций) ==== */
+
+// 🆔 Артикулы
+function menuRefresh_Arts_OZ_() {
+  const ss = SpreadsheetApp.getActive();
+  if (typeof getREFRESH_OZ === 'function') { getREFRESH_OZ(); ss.toast('Артикулы: Ozon — готово', 'OK', 3); }
+  else ss.toast('Функция getREFRESH_OZ не найдена', 'Нет обработчика', 5);
+}
+function menuRefresh_Arts_WB_() {
+  const ss = SpreadsheetApp.getActive();
+  if (typeof getREFRESH_WB === 'function') { getREFRESH_WB(); ss.toast('Артикулы: Wildberries — готово', 'OK', 3); }
+  else ss.toast('Функция getREFRESH_WB не найдена', 'Нет обработчика', 5);
+}
+
+// 📦 Физ. обороты
+function menuRefresh_Phys_OZ_() {
+  const ss = SpreadsheetApp.getActive();
+  if (typeof fiz0_OZ === 'function') { fiz0_OZ(); ss.toast('Физ. обороты: Ozon — готово', 'OK', 3); }
+  else ss.toast('Функция fiz0_OZ не найдена', 'Нет обработчика', 5);
+}
+function menuRefresh_Phys_WB_() {
+  const ss = SpreadsheetApp.getActive();
+  if (typeof fiz0_WB === 'function') { fiz0_WB(); ss.toast('Физ. обороты: Wildberries — готово', 'OK', 3); }
+  else ss.toast('Функция fiz0_WB не найдена', 'Нет обработчика', 5);
+}
+
+// 🍔 Склад и Себестоимости
+function menuRefresh_Import_Sklad_() {
+  const ss = SpreadsheetApp.getActive();
+  if (typeof Import_Sklad === 'function') { Import_Sklad(); ss.toast('Склад и Себестоимости — готово', 'OK', 3); }
+  else ss.toast('Функция Import_Sklad не найдена', 'Нет обработчика', 5);
 }

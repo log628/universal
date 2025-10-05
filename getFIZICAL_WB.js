@@ -1,25 +1,3 @@
-/** =========================================================
- * getFIZICAL_WB.gs — с фолбэками, если REF не определён
- *  - fiz1_WB:  [WB] Физ. оборот A:I
- *  - fiz2_WB:  [WB] Физ. оборот K:S (добавлен "ID отправления" после Даты)
- *  - fiz3_WB:  [WB] Физ. оборот U:Y
- *  - fiz0_WB:  оркестрация fiz3_WB → fiz2_WB → fiz1_WB
- * ========================================================= */
-
-// ---------- Безопасные фолбэки, если REF не прогрузился ----------
-const SHEET_FIZ_WB     = (typeof REF !== 'undefined' && REF.SHEETS && REF.SHEETS.FIZ_WB)     ? REF.SHEETS.FIZ_WB     : '[WB] Физ. оборот';
-const SHEET_ARTS_WB    = (typeof REF !== 'undefined' && REF.SHEETS && REF.SHEETS.ARTS_WB)    ? REF.SHEETS.ARTS_WB    : '[WB] Артикулы';
-const SHEET_PARAMS_WB  = (typeof REF !== 'undefined' && REF.SHEETS && REF.SHEETS.PARAMS)     ? REF.SHEETS.PARAMS     : '⚙️ Параметры';
-
-function _readCabinetColorMapWB_() {
-  try {
-    if (typeof REF !== 'undefined' && typeof REF.readCabinetColorMap === 'function') {
-      return REF.readCabinetColorMap('WILDBERRIES');
-    }
-  } catch (_) {}
-  return new Map();
-}
-
 /* =========================
  *        З А П У С К
  * ========================= */
@@ -31,10 +9,22 @@ function fiz0_WB() {
   console.log(t('START fiz0_WB'));
   ss.toast('Остатки → Заказы → Расчет', SHEET_FIZ_WB, 3);
 
+  let r3 = {}, r2 = {};
   try {
-    const t1 = Date.now(); fiz3_WB(); console.log(t(`fiz3_WB done in ${Date.now()-t1} ms`));
-    const t2 = Date.now(); fiz2_WB(); console.log(t(`fiz2_WB done in ${Date.now()-t2} ms`));
-    const t3 = Date.now(); fiz1_WB(); console.log(t(`fiz1_WB done in ${Date.now()-t3} ms`));
+    const t1 = Date.now(); r3 = fiz3_WB() || {}; console.log(t(`fiz3_WB done in ${Date.now()-t1} ms; okCabs=${(r3.okCabs||[]).length}`));
+    const t2 = Date.now(); r2 = fiz2_WB() || {}; console.log(t(`fiz2_WB done in ${Date.now()-t2} ms; okCabs=${(r2.okCabs||[]).length}`));
+    const t3 = Date.now();      fiz1_WB();        console.log(t(`fiz1_WB done in ${Date.now()-t3} ms`));
+
+    // --- ЛОГ В ⚙️ Параметры: только кабинеты, где были строки (заказы/остатки)
+    try {
+      const seen = new Set();
+      const ok = [];
+      for (const arr of [r2 && r2.okCabs || [], r3 && r3.okCabs || []]) {
+        for (const cab of arr) { if (!seen.has(cab)) { seen.add(cab); ok.push(cab); } }
+      }
+      REF.logRun('Физ.оборот WB', ok, 'WILDBERRIES');
+    } catch(_) {}
+
     ss.toast('Обновлено', SHEET_FIZ_WB, 3);
   } catch (e) {
     console.error(t(`ERROR fiz0_WB: ${e && e.stack || e}`));
@@ -64,7 +54,7 @@ function fiz1_WB() {
   const keySet  = new Set();
 
   for (const r of artsRows) {
-    const cab = String(r[0] || '').replace(/\u00A0/g, ' ').trim(); // нормализуем NBSP
+    const cab = String(r[0] || '').replace(/\u00A0/g, ' ').trim();
     const art = String(r[1] || '').trim();
     if (!cab || !art) continue;
     if (filterActive && pick.selected.indexOf(cab) === -1) continue;
@@ -119,7 +109,7 @@ function fiz1_WB() {
         if (dt >= wEdge.since && dt <= wEdge.to) {
           const slot = w===7?'w7':w===14?'w14':w===21?'w21':'w28';
           rec[slot].sum += qty;
-          if (method === 'FBS') rec[slot].hasFbs = true; // на WB почти все 'WB', но оставим совместимость
+          if (method === 'FBS') rec[slot].hasFbs = true; // совместимость
         }
       }
     }
@@ -185,13 +175,14 @@ function fiz1_WB() {
 function fiz2_WB() {
   const ss = SpreadsheetApp.getActive();
   const sh = ss.getSheetByName(SHEET_FIZ_WB) || ss.insertSheet(SHEET_FIZ_WB);
-
   _ensureFizHeader_WB(sh);
 
   const edges = _getLast30DaysEdgesExclToday(); // {sinceISO,toISO}
   const pick  = _getSelectedCabinetsFromParamsFIZ_WB(); // {selected,total,cabinetsToProcess,tokensByCab}
 
   const out = []; // K:S
+  const okSet = new Set();
+
   for (const cab of pick.cabinetsToProcess) {
     const tokens = pick.tokensByCab.get(cab) || [];
     if (!tokens.length) continue;
@@ -206,6 +197,8 @@ function fiz2_WB() {
         if (i === tokens.length - 1) console.log(`WB.getOrders fail for ${cab}: ${e && e.message || e}`);
       }
     }
+
+    const before = out.length;
     for (const row of (orders || [])) {
       if (row.isCancel) continue;
 
@@ -216,13 +209,14 @@ function fiz2_WB() {
       const offer = String(row.supplierArticle || '').trim();
       if (!offer) continue;
 
-      const qty = 1; // поштучно
+      const qty = 1;
       const wh  = String(row.warehouseName || '').trim();
       const postingId = String(row.srid || row.orderId || row.id || '').trim();
 
       // K:S = Каб, Дата, ID отправления, Артикул, Кол-во, Метод, Склад отгр., Кл. отгр., Кл. дост.
       out.push([ cab, dt, postingId, offer, qty, 'WB', wh || '', '', '' ]);
     }
+    if (out.length > before) okSet.add(cab);
   }
 
   _clearBlock(sh, 2, 11, 99999, 9); // K:S
@@ -234,12 +228,13 @@ function fiz2_WB() {
       .setFontFamily('Roboto').setFontSize(8).setFontColor('#000000')
       .setFontWeight('normal').setHorizontalAlignment('left').setVerticalAlignment('middle');
 
-    // сортировка по дате ↓ (колонка L = 12)
-    rng.sort([{ column: 12, ascending: false }]);
+    rng.sort([{ column: 12, ascending: false }]); // по дате ↓ (L)
   }
 
   SpreadsheetApp.flush();
   ss.toast('Заказы (WB): записано строк ' + out.length, 'Готово', 3);
+
+  return { rows: out.length, okCabs: Array.from(okSet) };
 }
 
 /* =========================
@@ -248,12 +243,13 @@ function fiz2_WB() {
 function fiz3_WB() {
   const ss = SpreadsheetApp.getActive();
   const sh = ss.getSheetByName(SHEET_FIZ_WB) || ss.insertSheet(SHEET_FIZ_WB);
-
   _ensureFizHeader_WB(sh);
 
   const pick = _getSelectedCabinetsFromParamsFIZ_WB(); // с токенами
 
   const out = []; // U:Y
+  const okSet = new Set();
+
   for (const cab of pick.cabinetsToProcess) {
     const tokens = pick.tokensByCab.get(cab) || [];
     if (!tokens.length) continue;
@@ -269,6 +265,7 @@ function fiz3_WB() {
       }
     }
 
+    const before = out.length;
     for (const it of (stocks || [])) {
       const offer = String(it.supplierArticle || '').trim();
       const qty = _num0(it.quantity);
@@ -279,6 +276,7 @@ function fiz3_WB() {
 
       out.push([cab, offer, qty, whName, cluster]);
     }
+    if (out.length > before) okSet.add(cab);
   }
 
   _clearBlock(sh, 2, 21, 99999, 5); // U:Y
@@ -291,6 +289,8 @@ function fiz3_WB() {
 
   SpreadsheetApp.flush();
   ss.toast('Остатки (WB): записано строк ' + out.length, 'Готово', 3);
+
+  return { rows: out.length, okCabs: Array.from(okSet) };
 }
 
 /* =========================
@@ -462,4 +462,18 @@ function _getSelectedCabinetsFromParamsFIZ_WB() {
   res.cabinetsToProcess = (!uniqSel.length || uniqSel.length === uniqAll.length) ? uniqAll : uniqSel;
 
   return res;
+}
+
+/* ---------- Безопасные фолбэки, если REF не прогрузился ---------- */
+const SHEET_FIZ_WB     = (typeof REF !== 'undefined' && REF.SHEETS && REF.SHEETS.FIZ_WB)     ? REF.SHEETS.FIZ_WB     : '[WB] Физ. оборот';
+const SHEET_ARTS_WB    = (typeof REF !== 'undefined' && REF.SHEETS && REF.SHEETS.ARTS_WB)    ? REF.SHEETS.ARTS_WB    : '[WB] Артикулы';
+const SHEET_PARAMS_WB  = (typeof REF !== 'undefined' && REF.SHEETS && REF.SHEETS.PARAMS)     ? REF.SHEETS.PARAMS     : '⚙️ Параметры';
+
+function _readCabinetColorMapWB_() {
+  try {
+    if (typeof REF !== 'undefined' && typeof REF.readCabinetColorMap === 'function') {
+      return REF.readCabinetColorMap('WILDBERRIES');
+    }
+  } catch (_) {}
+  return new Map();
 }

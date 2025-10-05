@@ -21,213 +21,211 @@ function Import_Sklad() {
   const ss   = SpreadsheetApp.getActive();
   const shCC = mustSheet(ss, '🍔 СС');
 
-  // === 0) Токен МС
-  const token = String(shCC.getRange('AG2').getValue() || '').trim();
-  if (!token) throw new Error('Пустой токен МС в 🍔 СС!AG2');
+  const T0 = Date.now();
+  const t = (label) => `[+${String(Date.now()-T0).padStart(6,' ')} ms] ${label}`;
+  console.log(t('START Import_Sklad'));
+  ss.toast('Импорт МойСклад → расчёт СС', 'Склад + СС', 3);
 
-  // === 1) Ассортимент из МС: code / Производитель / Модель / Вес(сырое, граммы)
-  const ms  = new MoySklad(token);
-  const prods = fetchProductsFromMS_(ms); // [{code, manufacturer, model, weightRaw}]
-  const prodByCode = {};
-  for (const p of prods) {
-    prodByCode[p.code] = {
-      manufacturer: p.manufacturer || '',
-      model: p.model || '',
-      weightRaw: ('weightRaw' in p ? p.weightRaw : '')
-    };
-  }
+  try {
+    // === 0) Токен МС
+    const token = String(shCC.getRange('AG2').getValue() || '').trim();
+    if (!token) throw new Error('Пустой токен МС в 🍔 СС!AG2');
 
-  // === 2) Выгрузка складов (как в оригинале) → 🍔 СС!AI:AL
-  const stockRows = exportStocksToCC_(ms, shCC); // [ [store, code, available, inTransit], ... ]
-  const stockAgg  = aggregateStocks_(stockRows); // code -> {availMain, transitMain, availWB}
-
-  // === 3) Курсы L:M (юань/доллар/доставка)
-  const lastRowCC = shCC.getLastRow();
-  const rates = {};
-  if (lastRowCC >= 1) {
-    const lm = shCC.getRange(1, 12, lastRowCC, 2).getValues(); // L(12):M(13)
-    for (const [name, val] of lm) {
-      const k = String(name || '').trim().toLowerCase();
-      const v = toNum(val);
-      if (!k || !isFinite(v)) continue;
-      if (k === 'юань' || k === 'доллар' || k === 'доставка') rates[k] = v;
+    // === 1) Ассортимент из МС
+    const ms  = new MoySklad(token);
+    const prods = fetchProductsFromMS_(ms); // [{code, manufacturer, model, weightRaw}]
+    const prodByCode = {};
+    for (const p of prods) {
+      prodByCode[p.code] = {
+        manufacturer: p.manufacturer || '',
+        model: p.model || '',
+        weightRaw: ('weightRaw' in p ? p.weightRaw : '')
+      };
     }
-  }
 
-  // === 4) Упаковка S:Y (строго по позициям без заголовков) — S=код, Y=надбавка (руб)
-  const packByCode = {};
-  if (lastRowCC >= 2) {
-    const pack = shCC.getRange(2, 19, lastRowCC - 1, 7).getValues(); // S..Y
-    for (const row of pack) {
-      const code = String(row[0] || '').trim(); // S
-      if (!code) continue;
-      const add = toNum(row[6]);                // Y
-      packByCode[code] = isFinite(add) ? add : 0;
-    }
-  }
+    // === 2) Выгрузка складов → 🍔 СС!AI:AL
+    const stockRows = exportStocksToCC_(ms, shCC); // [ [store, code, available, inTransit], ... ]
+    const stockAgg  = aggregateStocks_(stockRows); // code -> {availMain, transitMain, availWB}
 
-  // === 5) Комплекты O:Q (строго по позициям) — O=Комплект, P=Состав, Q=Кол-во
-  const kits = readKits_(shCC); // {kit: [{part, qty}, ...]}
-
-  // === 6) Приёмки (внешний файл), берём Очередность=1
-  const ext   = SpreadsheetApp.openById(RECIEVES_SPREADSHEET_ID);
-  const shRec = mustSheet(ext, 'Приёмки');
-  const rec   = shRec.getDataRange().getValues();
-  const rHdr  = headerMap(rec[0] || []);
-  const priceCol = ('СС в валюте' in rHdr) ? 'СС в валюте'
-                   : ('СС в валюте документа' in rHdr) ? 'СС в валюте документа'
-                   : null;
-  if (!priceCol) throw new Error('В "Приёмки" нет "СС в валюте" или "СС в валюте документа"');
-  ['Товар','Валюта','Очередность'].forEach(c => mustHave(rHdr, c, 'Приёмки'));
-
-  const currMap = {
-    'доллар сша':       'доллар',
-    'китайский юань':   'юань',
-    'российский рубль': 'рубль'
-  };
-
-  // code -> {costDoc, curr}
-  const priceByCode = {};
-  for (const row of rec.slice(1)) {
-    const ord = toNum(row[rHdr['Очередность']]);
-    if (ord !== 1) continue;
-    const code = String(row[rHdr['Товар']] || '').trim();
-    if (!code) continue;
-    const cost = toNum(row[rHdr[priceCol]]);
-    const msC  = String(row[rHdr['Валюта']] || '').trim().toLowerCase();
-    const cur  = currMap[msC] || (msC || '');
-    priceByCode[code] = { costDoc: isFinite(cost) ? cost : '', curr: cur };
-  }
-
-  // === 7) Набор всех кодов (товары + что встречалось в приёмках/складах/комплектах)
-  const codeSet = new Set();
-  prods.forEach(p => codeSet.add(p.code));
-  Object.keys(priceByCode).forEach(c => codeSet.add(c));
-  Object.keys(stockAgg).forEach(c => codeSet.add(c));
-  Object.keys(kits).forEach(k => codeSet.add(k));
-  Object.values(kits).forEach(arr => arr.forEach(({part}) => codeSet.add(part)));
-
-  // === 8) Комплектные СС в ЮАНЯХ (пересчёт «по-особенному» только если все составные в юанях)
-  for (const kit of Object.keys(kits)) {
-    if (!codeSet.has(kit)) continue;
-    let sumYuan = 0;
-    let ok = true;
-    for (const { part, qty } of kits[kit]) {
-      const info = priceByCode[part];
-      const cost = info ? info.costDoc : '';
-      const cur  = info ? (info.curr || '') : '';
-      if (cost === '' || cur !== 'юань') { ok = false; break; }
-      sumYuan += Number(cost) * Number(qty || 0);
-    }
-    if (ok) {
-      priceByCode[kit] = { costDoc: sumYuan, curr: 'юань' }; // перезаписываем комплект
-    }
-  }
-
-  // === 9) Комплектные количества по карманам (Наличие/В пути/В поставке) из разложений
-  const kitStocks = computeKitStocks_(kits, stockAgg); // {kit: {availMain, transitMain, availWB}}
-  // Подменяем агрегаты для комплектов их «потенциалом»
-  Object.keys(kitStocks).forEach(kit => {
-    stockAgg[kit] = kitStocks[kit];
-  });
-
-  // === 10) Сборка итоговых строк A:J
-  const HEADER = [
-    'Товар',
-    'Производитель',
-    'Модель',
-    'СС в валюте',
-    'Валюта',
-    'СС+Упак+Дост',
-    'Наличие',
-    'В пути',
-    'В поставке',
-    'Расчёт'
-  ];
-
-  const codes = Array.from(codeSet).filter(Boolean).sort((a,b)=>String(a).localeCompare(String(b)));
-  const out = [];
-  for (const code of codes) {
-    const p = prodByCode[code] || {manufacturer:'', model:'', weightRaw:''};
-    const r = priceByCode[code] || {costDoc:'', curr:''};
-    const s = stockAgg[code]    || {availMain:0, transitMain:0, availWB:0};
-
-    // базовая СС в рублях (из юаней/долларов/рубля)
-    const curr = String(r.curr || '').toLowerCase();
-    let costRub = '';
-    if (r.costDoc !== '' && isFinite(Number(r.costDoc))) {
-      if (curr === 'рубль' || curr === 'rub' || curr === 'rur') {
-        costRub = Number(r.costDoc);
-      } else if (curr === 'юань') {
-        const rate = rates['юань'];
-        if (isFinite(rate)) costRub = Number(r.costDoc) * rate;
-      } else if (curr === 'доллар') {
-        const rate = rates['доллар'];
-        if (isFinite(rate)) costRub = Number(r.costDoc) * rate;
+    // === 3) Курсы L:M (юань/доллар/доставка)
+    const lastRowCC = shCC.getLastRow();
+    const rates = {};
+    if (lastRowCC >= 1) {
+      const lm = shCC.getRange(1, 12, lastRowCC, 2).getValues(); // L(12):M(13)
+      for (const [name, val] of lm) {
+        const k = String(name || '').trim().toLowerCase();
+        const v = toNum(val);
+        if (!k || !isFinite(v)) continue;
+        if (k === 'юань' || k === 'доллар' || k === 'доставка') rates[k] = v;
       }
     }
 
-    // упаковка (руб)
-    const packAdd = isFinite(toNum(packByCode[code])) ? Number(packByCode[code]) : 0;
+    // === 4) Упаковка S:Y
+    const packByCode = {};
+    if (lastRowCC >= 2) {
+      const pack = shCC.getRange(2, 19, lastRowCC - 1, 7).getValues(); // S..Y
+      for (const row of pack) {
+        const code = String(row[0] || '').trim(); // S
+        if (!code) continue;
+        const add = toNum(row[6]);                // Y
+        packByCode[code] = isFinite(add) ? add : 0;
+      }
+    }
 
-    // доставка:
-    // вес в граммах → кг
-    const weightKg = isFinite(toNum(p.weightRaw)) ? (Number(p.weightRaw) / 1000) : 0;
-    // тариф доставки (за кг) в долларах
-    const rateDeliveryUSD = isFinite(toNum(rates['доставка'])) ? Number(rates['доставка']) : 0;
-    // доставка в $:
-    const deliveryUSD = weightKg * rateDeliveryUSD;
-    // курс доллара
-    const usdRate = isFinite(toNum(rates['доллар'])) ? Number(rates['доллар']) : 0;
-    // доставка в рублях
-    const deliveryRub = deliveryUSD * usdRate;
-    // *1.1
-    const deliveryRubFinal = deliveryRub * 1.1;
+    // === 5) Комплекты O:Q
+    const kits = readKits_(shCC); // {kit: [{part, qty}, ...]}
 
-    // итог: СС (₽, если есть) + Упаковка + Доставка(₽)*1.1
-    const baseRub = isFinite(toNum(costRub)) ? Number(costRub) : 0;
-    const totalRub = baseRub + packAdd + deliveryRubFinal;
+    // === 6) Приёмки (внешний файл), берём Очередность=1
+    const ext   = SpreadsheetApp.openById(RECIEVES_SPREADSHEET_ID);
+    const shRec = mustSheet(ext, 'Приёмки');
+    const rec   = shRec.getDataRange().getValues();
+    const rHdr  = headerMap(rec[0] || []);
+    const priceCol = ('СС в валюте' in rHdr) ? 'СС в валюте'
+                     : ('СС в валюте документа' in rHdr) ? 'СС в валюте документа'
+                     : null;
+    if (!priceCol) throw new Error('В "Приёмки" нет "СС в валюте" или "СС в валюте документа"');
+    ['Товар','Валюта','Очередность'].forEach(c => mustHave(rHdr, c, 'Приёмки'));
 
-    // подробный расчёт в J:
-    const calcDetail = [
-      `вескг=${weightKg}`,
-      `тариф$=${rateDeliveryUSD}`,
-      `дост$=${deliveryUSD}`,
-      `курс$=${usdRate}`,
-      `дост₽=${deliveryRub}`,
-      `*1.1=${deliveryRubFinal}`,
-      `СС₽=${baseRub}`,
-      `упак=${packAdd}`,
-      `итого₽=${totalRub}`
-    ].join(' | ');
+    const currMap = {
+      'доллар сша':       'доллар',
+      'китайский юань':   'юань',
+      'российский рубль': 'рубль'
+    };
 
-    out.push([
-      code,                                         // A
-      p.manufacturer,                               // B
-      p.model,                                      // C
-      r.costDoc === '' ? '' : Number(r.costDoc),    // D: СС в валюте
-      curr || '',                                   // E: Валюта
-      Number(totalRub),                             // F: СС+Упак+Дост (руб)
-      s.availMain,                                  // G: Наличие
-      s.transitMain,                                // H: В пути
-      s.availWB,                                    // I: В поставке
-      calcDetail                                    // J: Расчёт
-    ]);
-  }
+    // code -> {costDoc, curr}
+    const priceByCode = {};
+    for (const row of rec.slice(1)) {
+      const ord = toNum(row[rHdr['Очередность']]);
+      if (ord !== 1) continue;
+      const code = String(row[rHdr['Товар']] || '').trim();
+      if (!code) continue;
+      const cost = toNum(row[rHdr[priceCol]]);
+      const msC  = String(row[rHdr['Валюта']] || '').trim().toLowerCase();
+      const cur  = currMap[msC] || (msC || '');
+      priceByCode[code] = { costDoc: isFinite(cost) ? cost : '', curr: cur };
+    }
 
-  // === 11) Запись в 🍔 СС!A:J
-  clearBlock(shCC, 1, 1, shCC.getMaxRows(), 10);
-  ensureCols(shCC, 10);
-  shCC.getRange(1,1,1,10).setValues([HEADER]).setFontWeight('bold');
-  if (out.length) shCC.getRange(2,1,out.length,10).setValues(out);
+    // === 7) Набор всех кодов
+    const codeSet = new Set();
+    prods.forEach(p => codeSet.add(p.code));
+    Object.keys(priceByCode).forEach(c => codeSet.add(c));
+    Object.keys(stockAgg).forEach(c => codeSet.add(c));
+    Object.keys(kits).forEach(k => codeSet.add(k));
+    Object.values(kits).forEach(arr => arr.forEach(({part}) => codeSet.add(part)));
 
-  shCC.setFrozenRows(1);
-  if (out.length) {
-    shCC.getRange(2,4,out.length,1).setNumberFormat('#,##0.00'); // D "СС в валюте"
-    shCC.getRange(2,6,out.length,1).setNumberFormat('#,##0.00'); // F "СС+Упак+Дост"
-    shCC.getRange(2,7,out.length,3).setNumberFormat('#,##0');    // G:H:I
+    // === 8) Комплектные СС в юанях (если все составные в юанях)
+    for (const kit of Object.keys(kits)) {
+      if (!codeSet.has(kit)) continue;
+      let sumYuan = 0;
+      let ok = true;
+      for (const { part, qty } of kits[kit]) {
+        const info = priceByCode[part];
+        const cost = info ? info.costDoc : '';
+        const cur  = info ? (info.curr || '') : '';
+        if (cost === '' || cur !== 'юань') { ok = false; break; }
+        sumYuan += Number(cost) * Number(qty || 0);
+      }
+      if (ok) priceByCode[kit] = { costDoc: sumYuan, curr: 'юань' };
+    }
+
+    // === 9) Комплектные количества (min floor)
+    const kitStocks = computeKitStocks_(kits, stockAgg);
+    Object.keys(kitStocks).forEach(kit => { stockAgg[kit] = kitStocks[kit]; });
+
+    // === 10) Сборка итоговых строк A:J
+    const HEADER = ['Товар','Производитель','Модель','СС в валюте','Валюта','СС+Упак+Дост','Наличие','В пути','В поставке','Расчёт'];
+
+    const codes = Array.from(codeSet).filter(Boolean).sort((a,b)=>String(a).localeCompare(String(b)));
+    const out = [];
+    for (const code of codes) {
+      const p = prodByCode[code] || {manufacturer:'', model:'', weightRaw:''};
+      const r = priceByCode[code] || {costDoc:'', curr:''};
+      const s = stockAgg[code]    || {availMain:0, transitMain:0, availWB:0};
+
+      const curr = String(r.curr || '').toLowerCase();
+      let costRub = '';
+      if (r.costDoc !== '' && isFinite(Number(r.costDoc))) {
+        if (curr === 'рубль' || curr === 'rub' || curr === 'rur') {
+          costRub = Number(r.costDoc);
+        } else if (curr === 'юань') {
+          const rate = rates['юань']; if (isFinite(rate)) costRub = Number(r.costDoc) * rate;
+        } else if (curr === 'доллар') {
+          const rate = rates['доллар']; if (isFinite(rate)) costRub = Number(r.costDoc) * rate;
+        }
+      }
+
+      const packAdd = isFinite(toNum(packByCode[code])) ? Number(packByCode[code]) : 0;
+
+      const weightKg = isFinite(toNum(p.weightRaw)) ? (Number(p.weightRaw) / 1000) : 0;
+      const rateDeliveryUSD = isFinite(toNum(rates['доставка'])) ? Number(rates['доставка']) : 0;
+      const deliveryUSD = weightKg * rateDeliveryUSD;
+      const usdRate = isFinite(toNum(rates['доллар'])) ? Number(rates['доллар']) : 0;
+      const deliveryRubFinal = (deliveryUSD * usdRate) * 1.1;
+
+      const baseRub = isFinite(toNum(costRub)) ? Number(costRub) : 0;
+      const totalRub = baseRub + packAdd + deliveryRubFinal;
+
+      const calcDetail = [
+        `вескг=${weightKg}`,
+        `тариф$=${rateDeliveryUSD}`,
+        `дост$=${deliveryUSD}`,
+        `курс$=${usdRate}`,
+        `дост₽=${deliveryUSD * usdRate}`,
+        `*1.1=${deliveryRubFinal}`,
+        `СС₽=${baseRub}`,
+        `упак=${packAdd}`,
+        `итого₽=${totalRub}`
+      ].join(' | ');
+
+      out.push([
+        code, p.manufacturer, p.model,
+        r.costDoc === '' ? '' : Number(r.costDoc),
+        curr || '',
+        Number(totalRub),
+        s.availMain, s.transitMain, s.availWB,
+        calcDetail
+      ]);
+    }
+
+    // === 11) Запись в 🍔 СС!A:J
+    clearBlock(shCC, 1, 1, shCC.getMaxRows(), 10);
+    ensureCols(shCC, 10);
+    shCC.getRange(1,1,1,10).setValues([HEADER]).setFontWeight('bold');
+    if (out.length) shCC.getRange(2,1,out.length,10).setValues(out);
+
+    shCC.setFrozenRows(1);
+    if (out.length) {
+      shCC.getRange(2,4,out.length,1).setNumberFormat('#,##0.00'); // D
+      shCC.getRange(2,6,out.length,1).setNumberFormat('#,##0.00'); // F
+      shCC.getRange(2,7,out.length,3).setNumberFormat('#,##0');    // G:H:I
+    }
+
+    // === 12) Лог в «Обновления»: Склад + СС → Кабинеты: "МойСклад" (время — текущее)
+    safeLogRun_MS_(['МойСклад']);
+
+    ss.toast('Склад + СС: обновлено', 'Готово', 3);
+    console.log(t(`END Import_Sklad | rows=${out.length}`));
+  } catch (e) {
+    // логируем попытку (без кабинетов), чтобы в «Время» отразилось выполнение
+    safeLogRun_MS_([]);
+    ss.toast('Склад + СС: ошибка, см. журнал', 'Ошибка', 6);
+    console.error(t(`ERROR Import_Sklad: ${e && e.stack || e}`));
+    throw e;
   }
 }
+function safeLogRun_MS_(cabs) {
+  try {
+    if (typeof REF !== 'undefined' && typeof REF.logRun === 'function') {
+      // Название блока для журнала: «Склад + СС»
+      // Кабинеты: массив, здесь всегда ["МойСклад"] (или [] при ошибке)
+      // Площадка: "MOYSKLAD" (произвольная метка, не влияет на отображение)
+      REF.logRun('Склад + СС', Array.isArray(cabs) ? cabs : ['МойСклад'], 'MOYSKLAD');
+    }
+  } catch (_) {
+    // молча игнорируем, чтобы не ломать основной процесс
+  }
+}
+
 
 /* ================== Вспомогательные блоки ================== */
 

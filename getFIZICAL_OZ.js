@@ -3,18 +3,16 @@
  *  - fiz1_OZ:  [OZ] Физ. оборот A:I ← пары из «[OZ] Артикулы»
  *  - fiz2_OZ:  [OZ] Физ. оборот K:S ← заказы 30д до конца вчера, сортировка по дате (L) DESC
  *  - fiz3_OZ:  [OZ] Физ. оборот U:Y ← остатки (>0) по /v1/analytics/stocks
- *  - fiz0_OZ:  оркестрация с подробным логгированием
+ *  - fiz0_OZ:  оркестрация с подробным логгированием + REF.logRun('Физ.оборот OZ', ...,'OZON')
  * ========================================================= */
 
 /* ---------- Безопасные фолбэки, если REF не прогрузился ---------- */
 const SHEET_FIZ_OZ   = (typeof REF !== 'undefined' && REF.SHEETS && REF.SHEETS.FIZ_OZ)   ? REF.SHEETS.FIZ_OZ   : '[OZ] Физ. оборот';
 const SHEET_ARTS_OZ  = (typeof REF !== 'undefined' && REF.SHEETS && REF.SHEETS.ARTS_OZ)  ? REF.SHEETS.ARTS_OZ  : '[OZ] Артикулы';
-const SHEET_PARAMS_OZ   = (typeof REF !== 'undefined' && REF.SHEETS && REF.SHEETS.PARAMS)   ? REF.SHEETS.PARAMS   : '⚙️ Параметры';
+const SHEET_PARAMS_OZ= (typeof REF !== 'undefined' && REF.SHEETS && REF.SHEETS.PARAMS)   ? REF.SHEETS.PARAMS   : '⚙️ Параметры';
 
 function _readCabinetColorMapAll_(platform) {
-  try {
-    return REF.readCabinetColorMap(platform || 'OZON'); // фильтр строго по D
-  } catch(_) { return new Map(); }
+  try { return REF.readCabinetColorMap(platform || 'OZON'); } catch(_) { return new Map(); }
 }
 
 
@@ -32,27 +30,27 @@ function fiz0_OZ() {
   ss.toast('Остатки → Заказы → Расчет', 'Запуск', 3);
   log('START');
 
-  // 1) Остатки
+  // 1) Остатки (U:Y)
   let t = Date.now();
   let res3 = {};
   try {
     res3 = fiz3_OZ() || {};
-    log('fiz3_OZ OK', `rows=${res3.rows||0}, cabinets=${res3.cabs||0}, took=${Date.now()-t}ms`);
+    log('fiz3_OZ OK', `rows=${res3.rows||0}, okCabs=${(res3.okCabs||[]).length}, took=${Date.now()-t}ms`);
   } catch (e) {
     log('fiz3_OZ FAIL', e && e.message ? e.message : String(e));
   }
 
-  // 2) Заказы
+  // 2) Заказы (K:S)
   t = Date.now();
   let res2 = {};
   try {
     res2 = fiz2_OZ() || {};
-    log('fiz2_OZ OK', `rows=${res2.rows||0}, cabinets=${res2.cabs||0}, took=${Date.now()-t}ms`);
+    log('fiz2_OZ OK', `rows=${res2.rows||0}, okCabs=${(res2.okCabs||[]).length}, took=${Date.now()-t}ms`);
   } catch (e) {
     log('fiz2_OZ FAIL', e && e.message ? e.message : String(e));
   }
 
-  // 3) Расчет
+  // 3) Расчет (A:I)
   t = Date.now();
   let res1 = {};
   try {
@@ -61,6 +59,16 @@ function fiz0_OZ() {
   } catch (e) {
     log('fiz1_OZ FAIL', e && e.message ? e.message : String(e));
   }
+
+  // --- ЛОГ В ⚙️ Параметры: только кабинеты, где что-то реально обновилось (заказы/остатки)
+  try {
+    const seen = new Set();
+    const ok = [];
+    for (const arr of [res2 && res2.okCabs || [], res3 && res3.okCabs || []]) {
+      for (const cab of arr) { if (!seen.has(cab)) { seen.add(cab); ok.push(cab); } }
+    }
+    REF.logRun('Физ.оборот OZ', ok, 'OZON');
+  } catch(_) {}
 
   const took = Date.now() - T0;
   ss.toast('Обновлено', SHEET_FIZ_OZ, 3);
@@ -102,7 +110,6 @@ function fiz1_OZ() {
     const key = cab + '|' + art;
     if (!keySet.has(key)) { keySet.add(key); keyList.push({ cab, art }); }
   }
-  // сортируем пары Кабинет→Артикул
   keyList.sort((a,b) => (a.cab.localeCompare(b.cab,'ru') || a.art.localeCompare(b.art,'ru')));
   log('PAIRS collected', `pairs=${keyList.length}`);
 
@@ -223,6 +230,7 @@ function fiz2_OZ() {
 
   const whToClusterCode = new Map();
   const out = [];
+  const okSet = new Set();
   let cabsProcessed = 0;
 
   for (const cab of pick.cabinetsToProcess) {
@@ -234,8 +242,11 @@ function fiz2_OZ() {
     try { fbo = api.getOrdersFbo(30) || []; } catch(e){ log('WARN getOrdersFbo', `${cab}: ${e.message||e}`); }
     try { fbs = api.getOrdersFbs(30) || []; } catch(e){ log('WARN getOrdersFbs', `${cab}: ${e.message||e}`); }
 
+    const before = out.length;
     _collectOrdersMT(out, cab, fbo, 'FBO', edges, whToClusterCode, /*useCodes=*/true);
     _collectOrdersMT(out, cab, fbs, 'FBS', edges, whToClusterCode, /*useCodes=*/false);
+    if (out.length > before) okSet.add(cab);
+
     log('CAB done', `${cab}: rowsNow=${out.length}, took=${Date.now()-tCab}ms`);
   }
 
@@ -243,21 +254,18 @@ function fiz2_OZ() {
   if (out.length) {
     const rng = sh.getRange(2, 11, out.length, 9);
     rng.setValues(out);
-
     sh.getRange(2, 11, out.length, 9)
       .setFontFamily('Roboto').setFontSize(8).setFontColor('#000000')
       .setFontWeight('normal').setHorizontalAlignment('left').setVerticalAlignment('middle');
-
-    // сортировка по дате ↓ (L)
-    rng.sort([{ column: 12, ascending: false }]); // L
-    log('SORT applied', 'by L (date) DESC');
+    rng.sort([{ column: 12, ascending: false }]); // по дате ↓ (L)
+    log('SORT applied', 'by L DESC');
   }
 
   SpreadsheetApp.flush();
   ss.toast('Заказы: записано строк ' + out.length, 'Готово', 3);
-  log('END', `rows=${out.length}, cabs=${cabsProcessed}`);
+  log('END', `rows=${out.length}, cabs=${cabsProcessed}, okCabs=${okSet.size}`);
 
-  return { rows: out.length, cabs: cabsProcessed };
+  return { rows: out.length, cabs: cabsProcessed, okCabs: Array.from(okSet) };
 }
 
 
@@ -274,7 +282,7 @@ function fiz3_OZ() {
 
   const sh = ss.getSheetByName(SHEET_FIZ_OZ) || ss.insertSheet(SHEET_FIZ_OZ);
   const shArts = ss.getSheetByName(SHEET_ARTS_OZ);
-  if (!shArts) throw new Error('Лист «' + SHEET_ARTS_OZ + '» не найден');
+  if (!shArts) throw new Error('Лист «' + SHEET_ARTS_OЗ + '» не найден');
 
   _ensureFizHeader_OZ(sh);
   log('HEADER ensured', `sheet=${SHEET_FIZ_OZ}`);
@@ -302,6 +310,7 @@ function fiz3_OZ() {
   let accs = {};
   try { accs = OZONAPI.getAccounts() || {}; } catch(_) { accs = {}; }
   const out = [];
+  const okSet = new Set();
   let cabsProcessed = 0;
 
   for (const [cab, offerSet] of offersByCab) {
@@ -326,6 +335,7 @@ function fiz3_OZ() {
       if (sku != null) skuToOffer[String(sku)] = off;
     }
 
+    const before = out.length;
     for (const it of items) {
       const sku = it && (it.sku ?? it.sku_id ?? it.id);
       const offer = (sku != null ? skuToOffer[String(sku)] : (it.offer_id || it.offer)) || '';
@@ -339,6 +349,8 @@ function fiz3_OZ() {
 
       out.push([cab, offer, qty, whName, cluster]);
     }
+    if (out.length > before) okSet.add(cab);
+
     log('CAB done', `${cab}: rowsNow=${out.length}, took=${Date.now()-tCab}ms`);
   }
 
@@ -352,9 +364,9 @@ function fiz3_OZ() {
 
   SpreadsheetApp.flush();
   ss.toast('Остатки: записано строк ' + out.length, 'Готово', 3);
-  log('END', `rows=${out.length}, cabs=${cabsProcessed}`);
+  log('END', `rows=${out.length}, cabs=${cabsProcessed}, okCabs=${okSet.size}`);
 
-  return { rows: out.length, cabs: cabsProcessed };
+  return { rows: out.length, cabs: cabsProcessed, okCabs: Array.from(okSet) };
 }
 
 
@@ -408,11 +420,7 @@ function _normWh(s) {
   return String(s || '').trim().replace(/\s+/g,' ').toLowerCase();
 }
 
-/* Хедеры: везде шрифт = 10; в A1 — "[ OZ ] Кабинет"
-   Блоки:
-   - A:I  — сводка (без «Склад»/«В пути»)
-   - K:S  — заказы (с «ID отправления» после даты)
-   - U:Y  — остатки */
+/* Хедеры и стили OZ */
 function _ensureFizHeader_OZ(sh) {
   // --- A:I ---
   const headersAI = ['[ OZ ] Кабинет','Артикул','Остаток','В поставке','Скорость','Ск [ 7 ]','Ск [ 14 ]','Ск [ 21 ]','Ск [ 28 ]'];
@@ -462,22 +470,16 @@ function _ensureFizHeader_OZ(sh) {
   sh.setFrozenRows(1);
 }
 
-
-/* Построчные заливки по Кабинету (с фолбэком, если REF нет) */
-/* Построчные заливки по Кабинету (с фильтром по площадке) */
+/* Построчные заливки по Кабинету (фильтр по площадке) */
 function _applyCabinetRowFills_OZ(sh, rows, startCol, numCols) {
   try {
-    const colorMap = _readCabinetColorMapAll_('OZON'); // ← ключевая правка
+    const colorMap = _readCabinetColorMapAll_('OZON');
     if (!rows || !rows.length) return;
 
     const fills = [];
     for (let i = 0; i < rows.length; i++) {
       const cab = String(rows[i][0] || '').trim();
       const color = (colorMap && colorMap.get(cab)) || '#ffffff';
-
-      // DEBUG: покажем, кого не нашли в карте цветов
-      if (!colorMap.has(cab)) console.log('NO COLOR FOR:', JSON.stringify(cab));
-
       const line = new Array(numCols);
       for (let c = 0; c < numCols; c++) line[c] = color;
       fills.push(line);
@@ -486,9 +488,7 @@ function _applyCabinetRowFills_OZ(sh, rows, startCol, numCols) {
   } catch (e) {}
 }
 
-
-
-/* Универсальные стили данных для блоков (по умолчанию шрифт 8) */
+/* Универсальные стили данных */
 function _applyFizDataStyles(sh, startRow, numRows, numCols, fontSize /* =8 */) {
   if (numRows <= 0) return;
   const size = (fontSize && +fontSize) ? +fontSize : 8;
@@ -510,9 +510,7 @@ function _collectOrdersMT(outRows, cab, postings, method, edges, whToClusterCode
     if (!(dt >= since && dt <= to)) continue;
 
     const statusRaw = String(p.status || p.state || '').trim().toLowerCase();
-    if (statusRaw === 'cancelled' || statusRaw === 'canceled' || /^cancel/.test(statusRaw)) {
-      continue;
-    }
+    if (statusRaw === 'cancelled' || statusRaw === 'canceled' || /^cancel/.test(statusRaw)) continue;
 
     const postingId = String(p.posting_number || p.postingNumber || p.id || '').trim();
 
@@ -524,16 +522,13 @@ function _collectOrdersMT(outRows, cab, postings, method, edges, whToClusterCode
       const fd = p.financial_data || {};
       codeFrom = String(fd.cluster_from || '').trim();
       codeTo   = String(fd.cluster_to || '').trim();
-      if (whName && codeFrom) {
-        whToClusterCodeMap.set(_normWh(whName), codeFrom);
-      }
+      if (whName && codeFrom) whToClusterCodeMap.set(_normWh(whName), codeFrom);
     }
 
     const pushRow = (offer, qty) => {
       if (!offer || !qty) return;
       const sCode = useCodes ? codeFrom : (whToClusterCodeMap.get(_normWh(whName)) || '');
       const dCode = useCodes ? codeTo   : '';
-      // K:S = Каб, Дата, ID отправления, Артикул, Кол-во, Метод, Склад отгр., Кл. отгр., Кл. дост.
       outRows.push([ cab, new Date(dt), postingId, offer, qty, method, whName || '', sCode, dCode ]);
     };
 
@@ -546,7 +541,6 @@ function _collectOrdersMT(outRows, cab, postings, method, edges, whToClusterCode
       }
       continue;
     }
-
     const rps = Array.isArray(p.resulting_products) ? p.resulting_products : [];
     for (const rp of rps) {
       const offer = rp.offer_id || rp.offer || '';
@@ -604,11 +598,6 @@ function _getSelectedCabinetsFromParamsFIZ() {
   res.total     = uniqAll.length;
   res.selected  = uniqSel;
 
-  if (!uniqSel.length || uniqSel.length === uniqAll.length) {
-    res.cabinetsToProcess = uniqAll;
-  } else {
-    res.cabinetsToProcess = uniqSel;
-  }
-
+  res.cabinetsToProcess = (!uniqSel.length || uniqSel.length === uniqAll.length) ? uniqAll : uniqSel;
   return res;
 }
