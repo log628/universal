@@ -37,6 +37,7 @@ function getREFRESH_WB() {
     ss.toast('Нет префиксов в ⚙️ Параметры!P — выгрузка пуста', 'Готово', 5);
     log('END', 'no prefixes -> 0 rows');
     try { REF.logRun('Артикулы WB', []); } catch(_){}
+     triggerRebuildIfWB_();    
     return;
   }
 
@@ -53,6 +54,7 @@ function getREFRESH_WB() {
     ss.toast('В ⚙️ Параметры ни один WB-кабинет не отмечен', 'Нет выбора', 5);
     log('END', 'no selected cabinets');
     try { REF.logRun('Артикулы WB', []); } catch(_){}
+      triggerRebuildIfWB_(); 
     return;
   }
 
@@ -244,6 +246,7 @@ function getREFRESH_WB() {
 
   // ===== 5) ЛОГ — только успешные кабинеты (платформа независима от muff_mp)
   try { REF.logRun('Артикулы WB', successCabs, 'WILDBERRIES'); } catch(_){}
+  triggerRebuildIfWB_();  
 
   /* ========================= ХЕЛПЕРЫ ========================= */
 
@@ -497,4 +500,33 @@ try { REF.logRun('Цены WB', successCabs, 'WILDBERRIES'); } catch(_){}
 
   ss.toast('WB цены: обновлено ' + totalUpdated + ' / ' + totalTouched + '; Параллель: +' + totalParUpdated, 'Готово', 5);
   log('END', 'updated=' + totalUpdated + ', touched=' + totalTouched + ', parallel=' + totalParUpdated);
+  triggerRebuildIfWB_();  
+}
+
+
+// === Перестроить калькулятор/параллель только если текущая платформа — WB ===
+function triggerRebuildIfWB_() {
+  try {
+    var plat = (REF && typeof REF.getCurrentPlatform === 'function') ? REF.getCurrentPlatform() : null;
+    if (plat !== 'WB') return; // запускаем только на WILDBERRIES
+
+    var ss = SpreadsheetApp.getActive();
+    var shCalc = ss.getSheetByName((REF && REF.SHEETS && REF.SHEETS.CALC) || '⚖️ Калькулятор');
+    if (!shCalc) return;
+
+    var ctrlRange =
+      (REF && typeof REF.getCabinetControlRange === 'function' && REF.getCabinetControlRange()) ||
+      shCalc.getRange(REF.CTRL_RANGE_A1);
+
+    var currentCab = String(ctrlRange.getDisplayValue() || '').trim();
+    if (!currentCab) return;
+
+    if (typeof runLayoutImmediate === 'function') {
+      runLayoutImmediate(currentCab); // getform.gs сам возьмёт текущую платформу
+    } else {
+      // запасной путь (если раннера нет)
+      if (typeof layoutCalculator === 'function') layoutCalculator(currentCab, { plat: 'WB' });
+      if (typeof layoutParallelInline_ === 'function') layoutParallelInline_(currentCab, { plat: 'WB' });
+    }
+  } catch (_) { /* тихо */ }
 }

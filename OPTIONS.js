@@ -29,6 +29,21 @@ var KBR_ARROWS = KBR_ARROWS || (function () {
   const KBR_ENTERPRICE_LABEL_KEY = 'ввод цены';
   const KBR_ENTERPRICE_LABEL_UI  = 'Ввод цены';
 
+  // ---- Палитра оформления для активной/неактивной сторон
+  const TXT_ACTIVE_OZ = '#016bbf';
+  const TXT_ACTIVE_WB = '#8c44bb';
+  const TXT_INACTIVE  = '#434343';
+  const BG_ACTIVE     = '#efefef';
+  const BG_INACTIVE   = '#999999';
+
+
+// + новые константы размеров
+const FONT_ACTIVE_SIZE   = 10;
+const FONT_INACTIVE_SIZE = 9;
+
+
+
+
   // --------------------------------------------------------------------------------
   //                                  ПУБЛИЧНЫЕ
   // --------------------------------------------------------------------------------
@@ -59,6 +74,9 @@ var KBR_ARROWS = KBR_ARROWS || (function () {
     // 3) Запись выбранной опции в «⚙️ Параметры» и тост
     const chosenValue = writeParams_(KBR_BTN_KEYS[idx], nextArrow);
     ss.toast('📃 ' + KBR_BTN_LABELSUI[idx] + ' = ' + (chosenValue || '—'), 'Готово', 3);
+
+    // 4) Перестиль всех трёх опций на основе их текущих стрелок
+    restyleAllOptions_(sh, settingsRow);
   }
 
   // «Ввод цены» (под «Быстрое заполнение»):
@@ -163,6 +181,80 @@ var KBR_ARROWS = KBR_ARROWS || (function () {
   //                               ВСПОМОГАТЕЛЬНЫЕ
   // --------------------------------------------------------------------------------
 
+  // Перестилить ВСЕ опции (0..2) исходя из их текущих стрелок
+  function restyleAllOptions_(sh, settingsTopRow) {
+    const plat = resolvePlatformTag_(); // 'OZ' | 'WB'
+    const activeTextColor = (plat === 'WB') ? TXT_ACTIVE_WB : TXT_ACTIVE_OZ;
+
+    for (let idx = 0; idx < 3; idx++) {
+      const btn = getSettingsButtonRange_(sh, settingsTopRow, idx); // C:D (2 строки)
+      if (!btn) continue;
+
+      const arrow = String(btn.getCell(1,1).getDisplayValue() || '').trim();
+      const isLeftActive = (arrow === KBR_ARROW_L);    // ◀️ активирует левую сторону (B)
+      const isRightActive = (arrow === KBR_ARROW_R);   // ▶️ активирует правую сторону (E)
+
+      const rowTop = btn.getRow();
+      // Диапазоны подписи слева/справа (мердж на 2 строки)
+      const rngB = mergeAware_(sh.getRange(rowTop, 2, 2, 1)); // B{top}:B{top+1}
+      const rngE = mergeAware_(sh.getRange(rowTop, 5, 2, 1)); // E{top}:E{top+1}
+
+      // Активная сторона
+      if (isLeftActive) {
+        applySideStyle_(rngB, true,  activeTextColor);
+        applySideStyle_(rngE, false, activeTextColor);
+      } else if (isRightActive) {
+        applySideStyle_(rngB, false, activeTextColor);
+        applySideStyle_(rngE, true,  activeTextColor);
+      } else {
+        // Неопределённо — считаем правую активной по умолчанию
+        applySideStyle_(rngB, false, activeTextColor);
+        applySideStyle_(rngE, true,  activeTextColor);
+      }
+    }
+  }
+
+  // Применить стиль к стороне (ячейке-мерджу) в зависимости от активности
+  function applySideStyle_(rng, isActive, activeTextColor) {
+    if (!rng) return;
+    if (isActive) {
+      rng
+        .setFontWeight('bold')
+         .setFontSize(FONT_ACTIVE_SIZE) 
+        .setFontColor(activeTextColor)
+        .setBackground(BG_ACTIVE);
+
+    } else {
+      rng
+        .setFontWeight('normal')
+        
+        .setFontColor(TXT_INACTIVE)
+        .setBackground(BG_INACTIVE);
+    }
+  }
+
+  // Вернуть текущую платформу ('OZ'|'WB'), с безопасным дефолтом
+  function resolvePlatformTag_() {
+    try {
+      // В проекте есть REF.getCurrentPlatform(): 'OZ' | 'WB' | null
+      const t = (typeof REF !== 'undefined' && typeof REF.getCurrentPlatform === 'function')
+        ? REF.getCurrentPlatform()
+        : null;
+      if (t === 'WB' || t === 'OZ') return t;
+    } catch (_) {}
+    // Альтернатива: читаем «⚙️ Параметры!I2» (если в проекте используется)
+    try {
+      const ss = SpreadsheetApp.getActive();
+      const sh = ss.getSheetByName(KBR_SHEET_PARAMS_NAME);
+      if (sh) {
+        const raw = String(sh.getRange('I2').getDisplayValue() || '').trim();
+        if (/^(ozon|oz)$/i.test(raw)) return 'OZ';
+        if (/^(wildberries|wb)$/i.test(raw)) return 'WB';
+      }
+    } catch (_) {}
+    return 'OZ';
+  }
+
   // Находим верхнюю строку мерджа B:E с нужным текстом (без учёта регистра/пробелов по краям)
   function findHeaderTopRow_(sh, title) {
     const maxRow = Math.min(sh.getMaxRows(), 200); // ограничимся верхней частью
@@ -200,6 +292,11 @@ var KBR_ARROWS = KBR_ARROWS || (function () {
     const top = quickTopRow ? (quickTopRow + 1) : 17; // fallback на старый кейс
     const rng = sh.getRange(top, 5, 2, 1); // E: 2 строки
     return (rng.isPartOfMerge() ? rng.getMergedRanges()[0] : rng);
+  }
+
+  // Если rng уже в мердже — вернуть сам мердж, иначе исходный rng
+  function mergeAware_(rng) {
+    return rng.isPartOfMerge() ? rng.getMergedRanges()[0] : rng;
   }
 
   // Точная прокраска краёв (лев/прав) для ◀️/▶️ через Advanced Sheets API

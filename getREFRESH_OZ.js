@@ -38,6 +38,8 @@ function getREFRESH_OZ() {
     ss.toast('Нет префиксов в ⚙️ Параметры!P — выгрузка пуста', 'Готово', 5);
     log('END', 'no prefixes -> 0 rows');
     try { REF.logRun('Артикулы OZ', [], 'OZ'); } catch(_){}
+  triggerRebuildIfOZ_();                 // ← ДОБАВИТЬ
+
     return;
   }
 
@@ -54,6 +56,8 @@ function getREFRESH_OZ() {
     ss.toast('В ⚙️ Параметры ни один OZON-кабинет не отмечен', 'Нет выбора', 5);
     log('END', 'no selected cabinets');
     try { REF.logRun('Артикулы OZ', [], 'OZ'); } catch(_){}
+
+      triggerRebuildIfOZ_();                 // ← ДОБАВИТЬ
     return;
   }
 
@@ -218,6 +222,8 @@ rows.push([
 
   // ===== 5) ЛОГ — только успешные кабинеты
 try { REF.logRun('Артикулы OZ', successCabs, 'OZON'); } catch(_){}
+
+triggerRebuildIfOZ_();                   // ← ДОБАВИТЬ
 
   /* ==================== локальные хелперы ==================== */
   function ensureLayoutN_(ss, sheetName, headers, N) {
@@ -442,4 +448,37 @@ try { REF.logRun('Цены OZ', successCabs, 'OZON'); } catch(_){}
 
   ss.toast('OZON цены: найдено ' + totalUpdated + ' из ' + totalTouched + ' строк; Параллель: +' + totalParUpdated, 'Готово', 5);
   log('END', 'updated=' + totalUpdated + ', touched=' + totalTouched + ', parallel=' + totalParUpdated);
+  triggerRebuildIfOZ_();                   // ← ДОБАВИТЬ
 }
+
+// === Перестроить калькулятор/параллель только если текущая платформа — OZON ===
+function triggerRebuildIfOZ_() {
+  try {
+    var plat = (REF && typeof REF.getCurrentPlatform === 'function') ? REF.getCurrentPlatform() : null;
+    if (plat !== 'OZ') return; // запускаем только на OZON
+
+    var ss = SpreadsheetApp.getActive();
+    var calcName = (REF && REF.SHEETS && REF.SHEETS.CALC) || '⚖️ Калькулятор';
+
+    var shCalc = ss.getSheetByName(calcName);
+    if (!shCalc) return;
+
+    // именованный диапазон/контрол кабинета
+    var ctrlRange =
+      (REF && typeof REF.getCabinetControlRange === 'function' && REF.getCabinetControlRange()) ||
+      shCalc.getRange(REF.CTRL_RANGE_A1);
+
+    var currentCab = String(ctrlRange.getDisplayValue() || '').trim();
+    if (!currentCab) return;
+
+    // универсальный раннер этого проекта — без кулдаунов
+    if (typeof runLayoutImmediate === 'function') {
+      runLayoutImmediate(currentCab);
+    } else {
+      // запасной путь (на всякий случай)
+      if (typeof layoutCalculator === 'function') layoutCalculator(currentCab, { plat: 'OZ' });
+      if (typeof layoutParallelInline_ === 'function') layoutParallelInline_(currentCab, { plat: 'OZ' });
+    }
+  } catch (_) { /* тихо */ }
+}
+
