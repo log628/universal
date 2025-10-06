@@ -1,16 +1,17 @@
 /** =========================
- *  Меню: Обновить выгрузку  +  [Сменить площадку]
+ *  Меню: 🚀 Экспорт  +  🛸 Импорт  +  [Сменить площадку]
  * ========================= */
 
 const PARAMS_I2_A1 = 'I2';
 
 function onOpen() {
   try { if (typeof setupCabinetControl_ === 'function') setupCabinetControl_(); } catch (_) {}
-  buildRefreshMenu_();            // ← новое меню с подпунктами
-  buildPlatformMenuBrackets_();   // ← старое меню переключателя, но с названием [Сменить площадку]
+  buildExportMenu_();             // ← 1) Экспорт (первым)
+  buildImportMenu_();             // ← 2) Импорт
+  buildPlatformMenuBrackets_();   // ← 3) Переключатель площадки
 }
 
-/** ========== [Сменить площадку] (как у тебя, только другой заголовок) ========== */
+/** ========== [Сменить площадку] ========== */
 function buildPlatformMenuBrackets_() {
   const ui = SpreadsheetApp.getUi();
   const menu = ui.createMenu('[Сменить площадку]');
@@ -106,15 +107,44 @@ function normalizePlatform_(raw) {
   return null;
 }
 
-/** ========== Обновить выгрузку (НОВОЕ меню с точными пунктами) ========== */
-function buildRefreshMenu_() {
+/** ========== 🚀 Экспорт ========== */
+function buildExportMenu_() {
   const ui = SpreadsheetApp.getUi();
-  const m  = ui.createMenu('Обновить выгрузку');
+  const m  = ui.createMenu('🚀 Экспорт');
+
+  m
+    .addItem('🔖 Цены', 'menuExport_SendPrices_')
+    .addToUi();
+}
+
+// 🚀 Экспорт → Цены
+function menuExport_SendPrices_() {
+  const ss = SpreadsheetApp.getActive();
+  if (typeof sendPricesFromCalculatorFast === 'function') {
+    try {
+      sendPricesFromCalculatorFast();
+      ss.toast('Экспорт цен — отправлено', 'OK', 3);
+    } catch (e) {
+      ss.toast('Экспорт цен — ошибка: ' + ((e && e.message) || e), 'Ошибка', 7);
+    }
+  } else {
+    ss.toast('Функция sendPricesFromCalculatorFast не найдена', 'Нет обработчика', 5);
+  }
+}
+
+/** ========== 🛸 Импорт (с блоком 🏷️ Цены) ========== */
+function buildImportMenu_() {
+  const ui = SpreadsheetApp.getUi();
+  const m  = ui.createMenu('🛸 Импорт');
 
   m
     // 🆔 Артикулы
     .addItem('🆔 Артикулы: Ozon',        'menuRefresh_Arts_OZ_')
     .addItem('🆔 Артикулы: Wildberries', 'menuRefresh_Arts_WB_')
+    .addSeparator()
+    // 🏷️ Цены (НОВОЕ место)
+    .addItem('🏷️ Цены: Ozon',        'menuRefresh_Prices_OZ_')
+    .addItem('🏷️ Цены: Wildberries', 'menuRefresh_Prices_WB_')
     .addSeparator()
     // 📦 Физ. обороты
     .addItem('📦 Физ. обороты: Ozon',        'menuRefresh_Phys_OZ_')
@@ -125,7 +155,7 @@ function buildRefreshMenu_() {
     .addToUi();
 }
 
-/** ==== Хэндлеры пунктов (прямые вызовы твоих функций) ==== */
+/** ==== Хэндлеры импорт-пунктов ==== */
 
 // 🆔 Артикулы
 function menuRefresh_Arts_OZ_() {
@@ -137,6 +167,26 @@ function menuRefresh_Arts_WB_() {
   const ss = SpreadsheetApp.getActive();
   if (typeof getREFRESH_WB === 'function') { getREFRESH_WB(); ss.toast('Артикулы: Wildberries — готово', 'OK', 3); }
   else ss.toast('Функция getREFRESH_WB не найдена', 'Нет обработчика', 5);
+}
+
+// 🏷️ Цены
+function menuRefresh_Prices_OZ_() {
+  const ss = SpreadsheetApp.getActive();
+  if (typeof getREFRESHprices_OZ === 'function') {
+    try { getREFRESHprices_OZ(); ss.toast('Импорт цен: Ozon — готово', 'OK', 3); }
+    catch (e) { ss.toast('Импорт цен Ozon — ошибка: ' + ((e && e.message) || e), 'Ошибка', 7); }
+  } else {
+    ss.toast('Функция getREFRESHprices_OZ не найдена', 'Нет обработчика', 5);
+  }
+}
+function menuRefresh_Prices_WB_() {
+  const ss = SpreadsheetApp.getActive();
+  if (typeof getREFRESHprices_WB === 'function') {
+    try { getREFRESHprices_WB(); ss.toast('Импорт цен: Wildberries — готово', 'OK', 3); }
+    catch (e) { ss.toast('Импорт цен Wildberries — ошибка: ' + ((e && e.message) || e), 'Ошибка', 7); }
+  } else {
+    ss.toast('Функция getREFRESHprices_WB не найдена', 'Нет обработчика', 5);
+  }
 }
 
 // 📦 Физ. обороты

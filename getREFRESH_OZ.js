@@ -86,29 +86,52 @@ function getREFRESH_OZ() {
       try { skuFallbackMap = api.getSkusByOffers(missingForSku) || {}; } catch (_) { skuFallbackMap = {}; }
     }
 
-    var cats = {};
-    try { cats = api.getCategoryTreeRU() || {}; } catch(_) { cats = {}; }
-    var byCategoryId = cats.byCategoryId || {};
-    var byTypeId     = cats.byTypeId || {};
+var cats = {};
+try { cats = api.getCategoryTreeRU() || {}; } catch(_) { cats = {}; }
+var byCategoryId     = cats.byCategoryId || {};
+var byTypeId         = cats.byTypeId || {};
+var typeNameByTypeId = cats.typeNameByTypeId || {};
 
-    function pickCategoryTitle_(det) {
-      var cid = det && (det.category_id || det.description_category_id);
-      var tid = det && det.type_id;
-      if (cid != null && byCategoryId[String(cid)]) return byCategoryId[String(cid)];
-      if (tid != null && byTypeId[String(tid)])     return byTypeId[String(tid)];
-      return '';
+function pickCategoryAndType_(det) {
+  var cid = det && (det.category_id || det.description_category_id);
+  var tid = det && det.type_id;
+
+  var category = '';
+  if (cid != null && byCategoryId[String(cid)]) {
+    category = byCategoryId[String(cid)];
+  } else if (tid != null && byTypeId[String(tid)]) {
+    category = byTypeId[String(tid)];
+  }
+
+  var typeName = (tid != null && typeNameByTypeId[String(tid)]) ? typeNameByTypeId[String(tid)] : '';
+  return { category: category, typeName: typeName };
+}
+
+function pickCommissions_(det) {
+  var fboPct = '', fbsPct = '', rfbsPct = '';
+  var arr = det && Array.isArray(det.commissions) ? det.commissions : [];
+
+  // универсальный парсер числа (если есть REF.toNumber — используем его)
+  var toNum = (typeof REF !== 'undefined' && typeof REF.toNumber === 'function')
+    ? REF.toNumber
+    : function(v){ return Number(String(v).replace(',', '.')); };
+
+  for (var i = 0; i < arr.length; i++) {
+    var c = arr[i];
+    var v = (c && c.percent != null) ? toNum(c.percent) : NaN;
+    if (!isNaN(v)) {
+      v = v + 5; // ← добавляем +5 п.п. ДЛЯ ВСЕХ схем
+      if (c.sale_schema === 'FBO')  fboPct  = v;
+      if (c.sale_schema === 'FBS')  fbsPct  = v;
+      if (c.sale_schema === 'RFBS') rfbsPct = v;
     }
-    function pickCommissions_(det) {
-      var fboPct = '', fbsPct = '', rfbsPct = '';
-      var arr = det && Array.isArray(det.commissions) ? det.commissions : [];
-      for (var i = 0; i < arr.length; i++) {
-        var c = arr[i];
-        if (c.sale_schema === 'FBO')  fboPct = c.percent || '';
-        if (c.sale_schema === 'FBS')  fbsPct = c.percent || '';
-        if (c.sale_schema === 'RFBS') rfbsPct = c.percent || '';
-      }
-      return { fboPct: fboPct, fbsPct: fbsPct, rfbsPct: rfbsPct };
-    }
+  }
+  return { fboPct: fboPct, fbsPct: fbsPct, rfbsPct: rfbsPct };
+}
+
+
+
+
     function pickSku_(det, offer) {
       return (det && (det.sku || det.sku_id || det.id)) || skuFallbackMap[offer] || '';
     }
@@ -141,23 +164,27 @@ function getREFRESH_OZ() {
       var sec   = resolveSection_(offer);
       if (!sec) continue;
 
-      var cm = pickCommissions_(det);
+var cm = pickCommissions_(det);
+var ct = pickCategoryAndType_(det);
+var catCell = ct.category || '';
+if (ct.typeName) catCell += ' | ' + ct.typeName;
 
-      rows.push([
-        cabKey,                                        // A
-        offer,                                         // B
-        csv['Отзывы'] || '',                           // C
-        String(csv['Рейтинг'] || '').replace(/\./g,','), // D
-        pickCategoryTitle_(det),                       // E
-        cm.fboPct,                                     // F
-        cm.fbsPct,                                     // G
-        cm.rfbsPct,                                    // H
-        calcVolumeLitersFromCsv_(csv),                 // I
-        pickPriceFromCsv_(csv),                        // J
-        pickSku_(det, offer),                          // K
-        'X',                                           // L
-        sec.ownCat || ''                               // M
-      ]);
+rows.push([
+  cabKey,                                        // A
+  offer,                                         // B
+  csv['Отзывы'] || '',                           // C
+  String(csv['Рейтинг'] || '').replace(/\./g,','), // D
+  catCell,                                       // E  <-- теперь "Категория | Тип"
+  cm.fboPct,                                     // F
+  cm.fbsPct,                                     // G
+  cm.rfbsPct,                                    // H
+  calcVolumeLitersFromCsv_(csv),                 // I
+  pickPriceFromCsv_(csv),                        // J
+  pickSku_(det, offer),                          // K
+  'X',                                           // L
+  sec.ownCat || ''                               // M
+]);
+
     }
     return rows;
   }

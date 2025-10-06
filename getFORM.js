@@ -334,16 +334,21 @@ function collectRowsForCalculator_(cabinet, ctx) {
   const lastCol = shS.getLastColumn();
   if (lastRow < 2 || lastCol < 13) return emptyCalcRows_();
 
-  // RAW чтение (быстрее, чем display)
+  // ----- индексы колонок -----
   const headers = shS.getRange(1,1,1,13).getValues()[0];
-  const colCab    = findHeaderIndexFlexible_(headers, ['Кабинет'])         || 1;  // A
-  const colArt    = findHeaderIndexFlexible_(headers, ['Артикул'])         || 2;  // B
-  const colRevsC  = findHeaderIndexFlexible_(headers, ['Отзывы'])          || 3;  // C
-  const colRateD  = findHeaderIndexFlexible_(headers, ['Рейтинг'])         || 4;  // D
-  const colOwnCat = findHeaderIndexFlexible_(headers, ['Своя категория'])  || 13; // M
+  const colCab    = findHeaderIndexFlexible_(headers, ['Кабинет'])        || 1;   // A
+  const colArt    = findHeaderIndexFlexible_(headers, ['Артикул'])        || 2;   // B
+  const colRevsC  = findHeaderIndexFlexible_(headers, ['Отзывы'])         || 3;   // C
+  const colRateD  = findHeaderIndexFlexible_(headers, ['Рейтинг'])        || 4;   // D
+  const colFBO    = findHeaderIndexFlexible_(headers, ['FBO'])            || 6;   // F   // [PAR]
+  const colFBS    = findHeaderIndexFlexible_(headers, ['FBS'])            || 7;   // G   // [PAR]
+  const colVolI   = findHeaderIndexFlexible_(headers, ['Объем','Объём'])  || 9;   // I   // [PAR]
+  const colPriceJ = findHeaderIndexFlexible_(headers, ['Цена'])           || 10;  // J   // [PAR]
+  const colOwnCat = findHeaderIndexFlexible_(headers, ['Своя категория']) || 13;  // M
 
   const vals = shS.getRange(2,1,lastRow-1,13).getValues(); // RAW
 
+  // ----- фильтр по кабинету -----
   const filtered = [];
   for (let i=0;i<vals.length;i++){
     const row = vals[i];
@@ -352,6 +357,7 @@ function collectRowsForCalculator_(cabinet, ctx) {
     if (art && cab === selectedCab) filtered.push(row);
   }
 
+  // стабильная сортировка по артикулу
   filtered.sort((a,b) => {
     const A = String(a[colArt-1]||'').trim();
     const B = String(b[colArt-1]||'').trim();
@@ -361,6 +367,7 @@ function collectRowsForCalculator_(cabinet, ctx) {
   const ssAJ = (ctx && ctx.ssAJ) ? ctx.ssAJ : (REF.readSS_AJ_Map ? REF.readSS_AJ_Map() : new Map());
   const physMap = readPhysMapForCabinet_((plat === 'WB') ? PHYS_WB : PHYS_OZ);
 
+  // ----- данные для КАЛЬКУЛЯТОРА -----
   const displayG = [];
   const ratingD  = [];
   const countC   = [];
@@ -371,13 +378,22 @@ function collectRowsForCalculator_(cabinet, ctx) {
   const flowO = [];
   const flowP = [];
 
-  for (let i=0;i<filtered.length;i++){
-    const row = filtered[i];
-    const art   = String(row[colArt   -1] || '').trim();
-    const rate  = REF.toNumber(row[colRateD -1]);
-    const revs  = REF.toNumber(row[colRevsC -1]);
-    const own   = String(row[colOwnCat-1] || '').trim();
+  // ----- данные для ПАРАЛЛЕЛИ (те же строки/порядок) -----
+  const parA = []; // Артикул
+  const parB = []; // Цена
+  const parC = []; // Объём
+  const parD = []; // FBO
+  const parE = []; // FBS
+  // СС возьмём из ssAA (общий источник)
 
+  for (let i=0;i<filtered.length;i++){
+    const row  = filtered[i];
+    const art  = String(row[colArt   -1] || '').trim();
+    const rate = REF.toNumber(row[colRateD -1]);
+    const revs = REF.toNumber(row[colRevsC -1]);
+    const own  = String(row[colOwnCat-1] || '').trim();
+
+    // суммарно для КАЛЬКУЛЯТОРА
     displayG.push(art);
     ratingD.push(rate);
     countC.push(revs);
@@ -418,10 +434,32 @@ function collectRowsForCalculator_(cabinet, ctx) {
       flowO.push('');
       flowP.push('');
     }
+
+    // ---- ПАРАЛЛЕЛЬ: из того же filtered (никаких повторных чтений/расчётов) ----
+    parA.push([art]);
+    parB.push([row[colPriceJ-1]]);
+    parC.push([row[colVolI  -1]]);
+    parD.push([row[colFBO   -1]]);
+    parE.push([row[colFBS   -1]]);
+  }
+
+  // кладём пакет для Параллели в ctx (общий кэш для этого прогона)
+  if (ctx) {
+    ctx.parallelCache = {
+      cabinet: selectedCab,
+      plat,
+      A: parA,
+      B: parB,
+      C: parC,
+      D: parD,
+      E: parE,
+      M: ssAA.map(v => [v]) // СС: тот же порядок, что и A..E
+    };
   }
 
   return { displayG, ratingD, countC, ssAA, flowM, flowN, flowO, flowP };
 }
+
 
 function emptyCalcRows_() {
   return { displayG: [], ratingD: [], countC: [], ssAA: [], flowM: [], flowN: [], flowO: [], flowP: [] };
@@ -623,11 +661,6 @@ function readPhysMapForCabinet_(physSheetName) {
 }
 
 /********************* «ПАРАЛЛЕЛЬ» — ИНЛАЙН (минимум) *********************/
-
-/**
- * Без оформления: считаем данные, подгоняем высоту (1 шапка + n),
- * пишем A2:E и M2:M. Заголовок (строка 1) не трогаем.
- */
 function layoutParallelInline_(cabinetFull, ctx) {
   const T0 = Date.now();
   techLog_('PAR_START', T0, 'layoutParallelInline_');
@@ -640,18 +673,39 @@ function layoutParallelInline_(cabinetFull, ctx) {
   if (!cabinet) throw new Error('Не выбран кабинет для «⛓️ Параллель»');
 
   const plat = (ctx && (ctx.plat === 'OZ' || ctx.plat === 'WB')) ? ctx.plat : resolvePlatformCurrent_();
+
+  // === 1) Пытаемся взять ГОТОВЫЕ ДАННЫЕ из калькулятора ===
+  const pc = ctx && ctx.parallelCache;
+  if (pc && pc.cabinet === cabinet && pc.plat === plat) {
+    const n = pc.A.length;
+    techLog_('PAR', T0, 'use parallelCache', { n });
+
+    ensureRowsExactlyStrict_(sh, 1 + n);
+    ensureColCapacityTo_(sh, Math.max(13, sh.getMaxColumns()));
+
+    if (n > 0) {
+      sh.getRange(2,  1, n, 1).setValues(pc.A); // A2:A (Артикул)
+      sh.getRange(2,  2, n, 1).setValues(pc.B); // B2:B (Цена)
+      sh.getRange(2,  3, n, 1).setValues(pc.C); // C2:C (Объём)
+      sh.getRange(2,  4, n, 1).setValues(pc.D); // D2:D (FBO)
+      sh.getRange(2,  5, n, 1).setValues(pc.E); // E2:E (FBS)
+      sh.getRange(2, 13, n, 1).setValues(pc.M); // M2:M (СС)
+    }
+
+    techLog_('PAR_END', T0, 'layoutParallelInline_', { wrote: n, source: 'cache' });
+    return;
+  }
+
+  // === 2) Fallback: старое поведение (на всякий случай) ===
   const artsSheetName = (plat === 'WB') ? ARTS_WB : ARTS_OZ;
   const shS = ss.getSheetByName(artsSheetName);
 
-  techLog_('PAR', T0, 'build data start', { sheet: artsSheetName });
+  techLog_('PAR', T0, 'build data start (fallback)', { sheet: artsSheetName });
 
-  // Буферы
   let A = [], B = [], C = [], D = [], E = [], M = [];
-
   if (shS) {
     const lastRow = shS.getLastRow();
     if (lastRow >= 2 && shS.getLastColumn() >= 13) {
-      // Одно широкое чтение (RAW быстрее)
       const hdr = shS.getRange(1,1,1,13).getValues()[0];
       const cCab = findHeaderIndexFlexible_(hdr, ['Кабинет'])        || 1;  // A
       const cArt = findHeaderIndexFlexible_(hdr, ['Артикул'])        || 2;  // B
@@ -663,7 +717,6 @@ function layoutParallelInline_(cabinetFull, ctx) {
 
       const vals = shS.getRange(2,1,lastRow-1,13).getValues();
 
-      // Фильтр по кабинету
       const rows = [];
       for (let i=0;i<vals.length;i++){
         const r = vals[i];
@@ -672,57 +725,71 @@ function layoutParallelInline_(cabinetFull, ctx) {
         if (art && cab === cabinet) rows.push(r);
       }
 
-      // Сортировка по артикулу
       rows.sort((a,b) => {
         const A = String(a[cArt-1]||'').trim();
         const B = String(b[cArt-1]||'').trim();
         return A < B ? -1 : (A > B ? 1 : 0);
       });
 
-      // Кэш СС (если не передали — читаем здесь)
+      // берём СС из уже собранной ssAJ/resolve, но аккуратно (может быть тяжелее)
       const ssAJ = (ctx && ctx.ssAJ) ? ctx.ssAJ : (REF.readSS_AJ_Map ? REF.readSS_AJ_Map() : new Map());
 
-      // Заполнение массивов столбцов
       const n = rows.length;
       A = new Array(n); B = new Array(n); C = new Array(n); D = new Array(n); E = new Array(n); M = new Array(n);
 
       for (let i=0;i<n;i++){
-        const r = rows[i];
+        const r   = rows[i];
         const art = String(r[cArt-1]||'').trim();
         const own = String(r[cOwn-1]||'').trim();
 
-        A[i] = [art];            // Артикул
-        B[i] = [r[cPr -1]];      // Цена
-        C[i] = [r[cVol-1]];      // Объём
-        D[i] = [r[cFBO-1]];      // Ставка FBO
-        E[i] = [r[cFBS-1]];      // Ставка FBS
+        A[i] = [art];
+        B[i] = [r[cPr -1]];
+        C[i] = [r[cVol-1]];
+        D[i] = [r[cFBO-1]];
+        E[i] = [r[cFBS-1]];
 
-        const cc = REF.resolveCCForArticle ? REF.resolveCCForArticle(plat, art, own, ssAJ) : 0;
-        M[i] = [cc > 0 ? cc : 'нет СС']; // СС
+        let cc = 0;
+        try { cc = REF.resolveCCForArticle ? REF.resolveCCForArticle(plat, art, own, ssAJ) : 0; }
+        catch(e){
+          if (isTechLogEnabled_()) techLog_('PAR_WARN', T0, 'CC resolve failed (fallback)', { art, err:String(e && e.message || e) });
+        }
+        M[i] = [cc > 0 ? cc : 'нет СС'];
+
+        if (i % 120 === 0) techLog_('PAR_PROGRESS', T0, 'fallback rows', { i, total:n });
       }
+
+      techLog_('PAR', T0, 'build data end (fallback)', { n });
+    } else {
+      techLog_('PAR', T0, 'build data end (fallback)', { n: 0, reason: 'empty arts sheet' });
     }
+  } else {
+    techLog_('PAR', T0, 'build data end (fallback)', { n: 0, reason: 'arts sheet missing' });
   }
 
-  const n = A.length;
-  techLog_('PAR', T0, 'build data end', { n });
+  const n = pc.A.length;
 
-  // Ровно 1 (шапка) + n строк
-  ensureRowsExactlyStrict_(sh, 1 + n);
-  // Убедимся, что M-столбец существует
-  ensureColCapacityTo_(sh, Math.max(13, sh.getMaxColumns()));
+// 1) держим фиксированный коридор высоты по максимуму кабинетов на площадке
+ensureParallelRowsByMaxCabinet_(sh, plat);
 
-  // Запись (только данные, без форматов)
-  if (n > 0) {
-    sh.getRange(2,  1, n, 1).setValues(A); // A2:A
-    sh.getRange(2,  2, n, 1).setValues(B); // B2:B
-    sh.getRange(2,  3, n, 1).setValues(C); // C2:C
-    sh.getRange(2,  4, n, 1).setValues(D); // D2:D
-    sh.getRange(2,  5, n, 1).setValues(E); // E2:E
-    sh.getRange(2, 13, n, 1).setValues(M); // M2:M
-  } // иначе оставляем одну строку шапки
+// 2) столбцов хватит
+ensureColCapacityTo_(sh, Math.max(13, sh.getMaxColumns()));
 
-  techLog_('PAR_END', T0, 'layoutParallelInline_', { wrote: n });
+// 3) пишем данные в первые n строк под шапкой; остаток НЕ трогаем
+if (n > 0) {
+  sh.getRange(2,  1, n, 1).setValues(pc.A); // A2:A
+  sh.getRange(2,  2, n, 1).setValues(pc.B); // B2:B
+  sh.getRange(2,  3, n, 1).setValues(pc.C); // C2:C
+  sh.getRange(2,  4, n, 1).setValues(pc.D); // D2:D
+  sh.getRange(2,  5, n, 1).setValues(pc.E); // E2:E
+  sh.getRange(2, 13, n, 1).setValues(pc.M); // M2:M
 }
+// никаких trim/insert под конкретный кабинет!
+
+
+  techLog_('PAR_END', T0, 'layoutParallelInline_', { wrote: n, source: 'fallback' });
+}
+
+
 
 /************* Вспомогалки *************/
 
@@ -871,3 +938,61 @@ function ensureRowsExactly_(sh, needRows) {
   if (cur < needRows)      sh.insertRowsAfter(cur, needRows - cur);
   else if (cur > needRows) sh.deleteRows(needRows + 1, cur - needRows);
 }
+
+
+/** Имя листа артикулов по платформе */
+function getArtsSheetNameByPlat_(plat) {
+  return (plat === 'WB') ? ARTS_WB : ARTS_OZ;
+}
+
+/** Считает максимум позиций (артикулов) среди кабинетов на текущей площадке */
+function computeMaxCabinetArticles_(plat) {
+  const ss = SpreadsheetApp.getActive();
+  const artsName = getArtsSheetNameByPlat_(plat);
+  const sh = ss.getSheetByName(artsName);
+  if (!sh) return 0;
+
+  const lastRow = sh.getLastRow();
+  const lastCol = sh.getLastColumn();
+  if (lastRow < 2 || lastCol < 2) return 0;
+
+  // Читаем A:B (Кабинет, Артикул) разом
+  const rng = sh.getRange(2, 1, lastRow - 1, Math.min(13, lastCol));
+  const vals = rng.getValues();
+
+  // Узнаём индексы колонок (на случай переименований)
+  const hdr = sh.getRange(1,1,1,Math.min(13,lastCol)).getValues()[0];
+  const cCab = findHeaderIndexFlexible_(hdr, ['Кабинет']) || 1; // A
+  const cArt = findHeaderIndexFlexible_(hdr, ['Артикул']) || 2; // B
+
+  const counts = new Map(); // cabinet -> count
+  for (let i = 0; i < vals.length; i++) {
+    const cab = String(vals[i][cCab-1] || '').trim();
+    const art = String(vals[i][cArt-1] || '').trim();
+    if (!cab || !art) continue;
+    counts.set(cab, (counts.get(cab) || 0) + 1);
+  }
+
+  let maxCount = 0;
+  counts.forEach(v => { if (v > maxCount) maxCount = v; });
+  return maxCount;
+}
+
+/**
+ * Убедиться, что на «⛓️ Параллель» строк ровно (1 шапка + maxArticles).
+ * Меняем количество строк ТОЛЬКО если реально отличается (без «дыхания»).
+ */
+function ensureParallelRowsByMaxCabinet_(sh, plat) {
+  const maxArticles = computeMaxCabinetArticles_(plat);
+  const want = 1 + Math.max(0, maxArticles); // +1 — шапка
+  const cur  = sh.getMaxRows();
+  if (want <= 0) return;
+
+  if (cur < want) {
+    sh.insertRowsAfter(cur, want - cur);
+  } else if (cur > want) {
+    // удаляем только «хвост» одним вызовом
+    sh.deleteRows(want + 1, cur - want);
+  }
+}
+

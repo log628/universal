@@ -193,44 +193,51 @@ OZONAPI.initFromSheet = function () {
     return finArr;
   };
 
-  // ====== Дерево категорий/типов (RU) — общий статический кэш ======
-  OZONAPI.prototype.getCategoryTreeRU = function () {
-    // 1) общий статический кэш
-    if (OZONAPI._categoryCacheStatic) return OZONAPI._categoryCacheStatic;
-    // 2) локальный кэш инстанса
-    if (this._categoryCache) return this._categoryCache;
+// ====== Дерево категорий/типов (RU) — общий статический кэш ======
+OZONAPI.prototype.getCategoryTreeRU = function () {
+  // 1) общий статический кэш
+  if (OZONAPI._categoryCacheStatic) return OZONAPI._categoryCacheStatic;
+  // 2) локальный кэш инстанса
+  if (this._categoryCache) return this._categoryCache;
 
-    var data = this._post('/v1/description-category/tree', {
-      payload: { language: 'RU' },
-      maxAttempts: 10,
-      baseDelayMs: 500
-    });
+  var data = this._post('/v1/description-category/tree', {
+    payload: { language: 'RU' },
+    maxAttempts: 10,
+    baseDelayMs: 500
+  });
 
-    var byCategoryId = {}; // { description_category_id: category_name }
-    var byTypeId = {};     // { type_id: category_name }
+  var byCategoryId = {};       // { description_category_id: category_name }
+  var byTypeId     = {};       // { type_id: category_name (родительская категория) }
+  var typeNameByTypeId = {};   // { type_id: type_name }
 
-    var walk = function (node, parentCategoryName) {
-      if (!node) return;
-      var catId = node.description_category_id;
-      var catName = node.category_name || parentCategoryName || '';
+  var walk = function (node, parentCategoryName) {
+    if (!node) return;
+    var catId   = node.description_category_id;
+    var catName = node.category_name || parentCategoryName || '';
 
-      if (catId && node.category_name) byCategoryId[String(catId)] = node.category_name;
-      if (node.type_id) byTypeId[String(node.type_id)] = catName || '';
+    if (catId && node.category_name) byCategoryId[String(catId)] = node.category_name;
 
-      if (Array.isArray(node.children)) {
-        node.children.forEach(function (child) { walk(child, node.category_name || parentCategoryName || ''); });
-      }
-    };
-
-    if (data && Array.isArray(data.result)) {
-      data.result.forEach(function (root) { walk(root, null); });
+    if (node.type_id) {
+      var tid = String(node.type_id);
+      byTypeId[tid] = catName || '';
+      if (node.type_name) typeNameByTypeId[tid] = node.type_name;
     }
 
-    var cache = { byCategoryId: byCategoryId, byTypeId: byTypeId };
-    this._categoryCache = cache;
-    OZONAPI._categoryCacheStatic = cache; // общий кэш
-    return cache;
+    if (Array.isArray(node.children)) {
+      node.children.forEach(function (child) { walk(child, node.category_name || parentCategoryName || ''); });
+    }
   };
+
+  if (data && Array.isArray(data.result)) {
+    data.result.forEach(function (root) { walk(root, null); });
+  }
+
+  var cache = { byCategoryId: byCategoryId, byTypeId: byTypeId, typeNameByTypeId: typeNameByTypeId };
+  this._categoryCache = cache;
+  OZONAPI._categoryCacheStatic = cache; // общий кэш
+  return cache;
+};
+
 
   // ====== Цены ======
   OZONAPI.prototype.getPrices = function () {
