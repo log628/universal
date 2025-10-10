@@ -1,8 +1,12 @@
 /** =========================================================
- * Refs.gs — справочники и утилиты (OZ/WB разделены)
- * Листы «[OZ] Артикулы» / «[WB] Артикулы» хранят A:M (13 колонок).
- * K=SKU, L=Раздел, M=Своя категория — базовые колонки листа (без «Наименование»).
- * Расширения дальше считаются «на лету» калькулятором.
+ * Refs.gs — единый справочник и утилиты для проекта (OZ/WB)
+ *  - Имена листов и именованные диапазоны — централизованы в REF.SHEETS / REF.*
+ *  - Безопасные резолверы имён листов: REF.sheetName(key, fallback)
+ *  - Справочники заголовков и ширин для «[OZ]/[WB] Физ. оборот»
+ *  - Числовые парсеры, логгер, чтение настроек «Мин. запас на карточку»
+ *
+ * Требование загрузки: положите Refs.gs выше в списке файлов, чтобы REF был
+ * доступен для остальных *.gs (или используйте безопасные фолбэки из REF.*)
  * ========================================================= */
 
 var REF = (function () {
@@ -12,17 +16,28 @@ var REF = (function () {
    *        Л И С Т Ы
    * ========================= */
   REF.SHEETS = {
+    // Каталоги артикулов
     ARTS_OZ: '[OZ] Артикулы',
     ARTS_WB: '[WB] Артикулы',
+
+    // Физический оборот (рабочие листы с расчётами)
     FIZ_OZ:  '[OZ] Физ. оборот',
     FIZ_WB:  '[WB] Физ. оборот',
 
+    // Прочие общие листы
     PARAMS:  '⚙️ Параметры',
     RATES:   '🔖 Тарифы',
     SS:      '🍔 СС',
+    CALC:    '⚖️ Калькулятор',
 
-    // ✅ Единое имя листа калькулятора
-    CALC:    '⚖️ Калькулятор'
+    // Форкаст
+    FORECAST: '🎏 Форкаст'
+  };
+
+  /** Универсальный безопасный резолвер имени листа по ключу REF.SHEETS */
+  REF.sheetName = function (key, fallback) {
+    try { return (REF && REF.SHEETS && REF.SHEETS[key]) || fallback || String(key || ''); }
+    catch (_) { return fallback || String(key || ''); }
   };
 
   // ✅ Контрол выбора кабинета — ИМЕНОВАННЫЙ ДИАПАЗОН
@@ -78,6 +93,106 @@ var REF = (function () {
     sh.getRange(1, 1, 1, headers.length).setValues([headers]);
   };
   REF.ensureArtsLayout12 = function (sheetName, tag) { REF.ensureArtsLayout10(sheetName, tag); };
+
+
+
+REF.FIZ = {
+  OZ: {
+    SHEET_KEY: 'FIZ_OZ',
+    TAG_LABEL: '[ OZ ] Кабинет',
+    HEADERS_AI: [
+      '[ OZ ] Кабинет',  // A
+      'Артикул',         // B
+      'Остаток',         // C  (FBO суммарно)
+      'Скорость'         // D  (max FBO + max FBS)
+    ],
+    // ширины под 4 колонки
+    COL_WIDTHS: { A: null, B: null, C: 90, D: 110 },
+    NUM_FORMATS_ROW: ['@','@','0.########','0.00']
+  },
+  WB: {
+    SHEET_KEY: 'FIZ_WB',
+    TAG_LABEL: '[ WB ] Кабинет',
+    HEADERS_AI: [
+      '[ WB ] Кабинет',  // A
+      'Артикул',         // B
+      'Остаток',         // C
+      'Скорость'         // D
+    ],
+    COL_WIDTHS: { A: null, B: null, C: 90, D: 110 },
+    NUM_FORMATS_ROW: ['@','@','0.########','0.00']
+  }
+};
+
+
+/* =========================
+ *  «Физ. оборот»: координаты таблиц
+ *  MAIN (A:D) — выгрузка: "[ TAG ] Кабинет" | "Артикул" | "Остаток" | "Скорость"
+ *  ORDERS (F:N) — заказы, STOCKS (P:T) — остатки по складам
+ * ========================= */
+REF.FIZ.SECTIONS = {
+  MAIN:   { startCol: 1,  width: 4,  headerA1: 'A1:D1', bodyA1: 'A2:D'  },
+  ORDERS: { startCol: 6,  width: 9,  headerA1: 'F1:N1', bodyA1: 'F2:N'  },
+  STOCKS: { startCol: 16, width: 5,  headerA1: 'P1:T1', bodyA1: 'P2:T'  }
+};
+
+/** Имя листа «Физ. оборот» по платформе */
+REF.FIZ.sheetNameByPlatform = function (platform /* 'OZ'|'WB' */) {
+  var p = String(platform||'').trim().toUpperCase();
+  if (p === 'OZ') return REF.sheetName('FIZ_OZ', '[OZ] Физ. оборот');
+  if (p === 'WB') return REF.sheetName('FIZ_WB', '[WB] Физ. оборот');
+  return '';
+};
+
+/** A:D — заголовки для основной таблицы (берём платформенные) */
+REF.FIZ.mainHeadersByPlatform = function (platform /* 'OZ'|'WB' */) {
+  var p = String(platform||'').trim().toUpperCase();
+  if (p === 'OZ') return (REF.FIZ.OZ && REF.FIZ.OZ.HEADERS_AI) ? REF.FIZ.OZ.HEADERS_AI : ['[ OZ ] Кабинет','Артикул','Остаток','Скорость'];
+  if (p === 'WB') return (REF.FIZ.WB && REF.FIZ.WB.HEADERS_AI) ? REF.FIZ.WB.HEADERS_AI : ['[ WB ] Кабинет','Артикул','Остаток','Скорость'];
+  return ['[ ? ] Кабинет','Артикул','Остаток','Скорость'];
+};
+
+/** Удобные геттеры диапазонов для MAIN (A:D) */
+REF.FIZ.getMainHeaderRange = function (sheet) {
+  var a1 = REF.FIZ.SECTIONS.MAIN.headerA1;
+  return sheet.getRange(a1);
+};
+REF.FIZ.getMainBodyRange = function (sheet, lastRow /* optional */) {
+  // Если lastRow не задан — вернём открытый A1-диапазон "A2:D" (для чтения/очистки)
+  var a1 = REF.FIZ.SECTIONS.MAIN.bodyA1;
+  if (!lastRow || lastRow < 2) return sheet.getRange(a1);
+  // Иначе — точный прямоугольник по текущему lastRow
+  var h = lastRow - 1;
+  return sheet.getRange(2, REF.FIZ.SECTIONS.MAIN.startCol, h, REF.FIZ.SECTIONS.MAIN.width);
+};
+
+REF.FIZ.applyMainWidths = function (sheet, platform /* 'OZ'|'WB' optional */) {
+  // A,B авто +50
+  sheet.autoResizeColumn(1); sheet.setColumnWidth(1, sheet.getColumnWidth(1) + 50);
+  sheet.autoResizeColumn(2); sheet.setColumnWidth(2, sheet.getColumnWidth(2) + 50);
+
+  var p = String(platform||'').trim().toUpperCase();
+  var cfg = (p==='WB' ? REF.FIZ.WB : REF.FIZ.OZ); // по умолчанию OZ
+  var cw = (cfg && cfg.COL_WIDTHS) || {C:90, D:110};
+  sheet.setColumnWidth(3, cw.C || 90);
+  sheet.setColumnWidth(4, cw.D || 110);
+};
+
+
+
+
+
+
+
+  // Цвета заголовков для «Физ. оборот» (новый вид)
+  REF.FIZ_COLORS = {
+    HEADER_MAIN_BG: '#434343', // для «тёмной» шапки где нужно
+    A_B_BG:         '#434343', // A:B
+    C_BG:           '#38761d', // Остаток FBO
+    D_E_BG:         '#1155cc', // Скорости
+    F_G_BG:         '#6d9eeb', // Окна (расчётные «Ск [N]»)
+    NEED_LEFT_BG:   '#741b47'  // Для заголовка «Потреб …» слева (если понадобится)
+  };
 
   /* =========================
    *     Ч И С Л О В Ы Е
@@ -332,14 +447,17 @@ var REF = (function () {
   /* =========================
    *    «Т О В А Р»  и  «С С»
    * ========================= */
+
+  // Преобразование артикульной записи в «товар» (как в 🍔СС!A)
   REF.toTovarFromArticle = function(platform, article) {
     var s = String(article||'').trim();
-    if (s.length >= 3) s = s.substring(3);
+    if (s.length >= 3) s = s.substring(3); // часто артикулы в формате OZ_/WB_...
     s = s.replace(/_cat\d$/i, '');
     return s;
   };
 
-  // «🍔 СС»!A:J → Map<tovar -> {cc, nal, vput, vpost}>
+  // «🍔 СС»!A:J → Map<tovar -> {cc, nal, vput, vpost, vpostOZ, vpostWB}>
+  // ВНИМАНИЕ: vpost = vpostOZ + vpostWB (для обратной совместимости).
   REF.readSS_AJ_Map = function() {
     var ss = SpreadsheetApp.getActive();
     var sh = ss.getSheetByName(REF.SHEETS.SS);
@@ -352,14 +470,20 @@ var REF = (function () {
 
     var hdr = sh.getRange(1, 1, 1, 10).getDisplayValues()[0]; // A:J
     var norm = function(s){ return String(s||'').trim().toLowerCase(); };
+
     var idx = {
-      tovar: hdr.findIndex(function(h){ return norm(h) === 'товар'; }) + 1,
-      ccud:  hdr.findIndex(function(h){ var n=norm(h); return n==='cc+упак+дост' || n==='сс+упак+дост'; }) + 1,
-      nal:   hdr.findIndex(function(h){ return norm(h) === 'наличие'; }) + 1,
-      vput:  hdr.findIndex(function(h){ return norm(h) === 'в пути'; }) + 1,
-      vpost: hdr.findIndex(function(h){ return norm(h) === 'в поставке'; }) + 1
+      tovar:   hdr.findIndex(function(h){ return norm(h) === 'товар'; }) + 1,
+      ccud:    hdr.findIndex(function(h){ var n=norm(h); return n==='cc+упак+дост' || n==='сс+упак+дост' || n==='cc+упак+дост.'; }) + 1,
+      nal:     hdr.findIndex(function(h){ return norm(h) === 'наличие'; }) + 1,
+      vput:    hdr.findIndex(function(h){ return norm(h) === 'в пути'; }) + 1,
+      vpostOZ: hdr.findIndex(function(h){ return norm(h) === 'в поставке oz'; }) + 1,
+      vpostWB: hdr.findIndex(function(h){ return norm(h) === 'в поставке wb'; }) + 1
     };
-    if (idx.tovar<=0 || idx.ccud<=0 || idx.nal<=0 || idx.vput<=0 || idx.vpost<=0) return map;
+
+    if (idx.tovar<=0 || idx.ccud<=0 || idx.nal<=0 || idx.vput<=0) return map;
+
+    var hasOZ = idx.vpostOZ > 0;
+    var hasWB = idx.vpostWB > 0;
 
     var vals = sh.getRange(2, 1, lastRow - 1, 10).getDisplayValues();
     for (var i=0;i<vals.length;i++){
@@ -367,16 +491,25 @@ var REF = (function () {
       var key = String(row[idx.tovar-1]||'').trim();
       if (!key) continue;
 
-      var cc   = REF.toNumber(row[idx.ccud - 1]);
-      var nal  = REF.toNumber(row[idx.nal  - 1]);
-      var vput = REF.toNumber(row[idx.vput - 1]);
-      var vpost= REF.toNumber(row[idx.vpost- 1]);
+      var cc     = REF.toNumber(row[idx.ccud - 1]);
+      var nal    = REF.toNumber(row[idx.nal  - 1]);
+      var vput   = REF.toNumber(row[idx.vput - 1]);
+      var vpo    = hasOZ ? REF.toNumber(row[idx.vpostOZ - 1]) : 0;
+      var vpw    = hasWB ? REF.toNumber(row[idx.vpostWB - 1]) : 0;
+
+      cc   = (isFinite(cc)   ? cc   : 0);
+      nal  = (isFinite(nal)  ? nal  : 0);
+      vput = (isFinite(vput) ? vput : 0);
+      vpo  = (isFinite(vpo)  ? vpo  : 0);
+      vpw  = (isFinite(vpw)  ? vpw  : 0);
 
       map.set(key, {
-        cc:   isFinite(cc)   ? cc   : 0,
-        nal:  isFinite(nal)  ? nal  : 0,
-        vput: isFinite(vput) ? vput : 0,
-        vpost:isFinite(vpost)? vpost: 0
+        cc:    cc,
+        nal:   nal,
+        vput:  vput,
+        vpost: vpo + vpw,
+        vpostOZ: vpo,
+        vpostWB: vpw
       });
     }
     return map;
@@ -448,7 +581,7 @@ var REF = (function () {
     return s === 'симкарты';
   };
 
-  /** Универсальный резолвер СС */
+  /** Универсальный резолвер СС (используется в калькуляторе/выгрузках) */
   REF.resolveCCForArticle = function (platform, article, ownCategory, ssAJMap) {
     var map = ssAJMap || REF.readSS_AJ_Map();
     var tovar = REF.toTovarFromArticle(platform, article);
@@ -468,8 +601,8 @@ var REF = (function () {
 
   REF.normCabinet = function (s) {
     return String(s == null ? '' : s)
-      .replace(/[\u00A0\u2007\u202F]/g, ' ') // NBSP, figure space, narrow no-break
-      .replace(/\s+/g, ' ')                  // схлопываем кратные пробелы
+      .replace(/[\u00A0\u2007\u202F]/g, ' ')
+      .replace(/\s+/g, ' ')
       .trim();
   };
 
@@ -549,7 +682,8 @@ var REF = (function () {
       if (want) {
         var isOZ = (platRaw === 'OZON' || platRaw === 'OZ');
         var isWB = (platRaw === 'WILDBERRIES' || platRaw === 'WB');
-        if ((want === 'OZON' && !isOZ) || (want === 'WILDBERRIES' && !isWB)) continue;
+if ((want === 'OZON' && !isOZ) || (want === 'WILDBERRIES' && !isWB)) continue;
+
       }
 
       var key = REF.normCabinet(cabRaw);
@@ -570,63 +704,144 @@ var REF = (function () {
    *  Л О Г Г Е Р  S:U (⚙️ Параметры)
    * ========================= */
   // Колонки: S=19 (Обновления), T=20 (Время), U=21 (Кабинеты)
-// platformHint: 'OZON' | 'WILDBERRIES' | 'OZ' | 'WB' | undefined
-REF.logRun = function (opLabel, cabinetsArray, platformHint) {
-  try {
+  // platformHint: 'OZON' | 'WILDBERRIES' | 'OZ' | 'WB' | undefined
+  REF.logRun = function (opLabel, cabinetsArray, platformHint) {
+    try {
+      var ss = SpreadsheetApp.getActive();
+      var sh = ss.getSheetByName(REF.SHEETS.PARAMS);
+      if (!sh) return;
+
+      var last = sh.getLastRow();
+      if (last < 2) return;
+
+      // Найти строку операции в S
+      var ops = sh.getRange(2, 19, last - 1, 1).getDisplayValues(); // S
+      var rowIndex = -1;
+      for (var i = 0; i < ops.length; i++) {
+        if (String(ops[i][0] || '').trim() === String(opLabel || '').trim()) { rowIndex = i + 2; break; }
+      }
+      if (rowIndex === -1) return;
+
+      // Формат времени: dd.MM HH:mm (с ведущими нулями)
+      var tz = ss.getSpreadsheetTimeZone() || 'Etc/GMT';
+      var stamp = Utilities.formatDate(new Date(), tz, 'dd.MM HH:mm');
+
+      // Если есть platformHint — нормализуем и используем как фильтр
+      var want = String(platformHint || '').trim().toUpperCase();
+      if (want === 'OZ') want = 'OZON';
+      if (want === 'WB') want = 'WILDBERRIES';
+
+      var seen = new Set(), out = [];
+      var arr = Array.isArray(cabinetsArray) ? cabinetsArray : (cabinetsArray ? [cabinetsArray] : []);
+
+      // Карта кратких имен с опциональным фильтром по площадке
+      var shortMap = REF.readCabinetShortNameMap(want || undefined);
+
+      for (var k = 0; k < arr.length; k++) {
+        var full = REF.normCabinet(arr[k]);
+        if (!full) continue;
+
+        var shortName = shortMap.get(full);
+        if (!shortName) {
+          // Фолбэк: без фильтра (если в Params нет строки с такой площадкой)
+          shortName = REF.getCabinetShortName(full, undefined) || full;
+        }
+
+        if (!seen.has(shortName)) {
+          seen.add(shortName);
+          out.push(shortName);
+        }
+      }
+
+      sh.getRange(rowIndex, 20).setValue(stamp);           // T (Время)
+      sh.getRange(rowIndex, 21).setValue(out.join(', '));  // U (Кабинеты)
+    } catch (_){}
+  };
+
+  /* =========================
+   *  Н А С Т Р О Й К И  (🎏 Форкаст!B:C)
+   *  «Мин. запас на карточку» (ранее: «Минимальный запас»)
+   *  B: FBS, шт   | C: <число>
+   *  B: FBO, шт   | C: <число>
+   *  B: FBS, дней | C: <число>
+   *  B: FBO, дней | C: <число>
+   * ========================= */
+  REF.SETTINGS = REF.SETTINGS || {};
+  REF.SETTINGS.FORECAST_SHEET = REF.SHEETS.FORECAST;
+  REF.SETTINGS.MIN_STOCK_TITLES = ['Мин. запас на карточку', 'Минимальный запас']; // поддержка старого названия
+  REF.SETTINGS.MIN_STOCK_LABELS = ['FBS, шт', 'FBO, шт', 'FBS, дней', 'FBO, дней'];
+
+  REF.readMinStockPerCard = function () {
     var ss = SpreadsheetApp.getActive();
-    var sh = ss.getSheetByName(REF.SHEETS.PARAMS);
-    if (!sh) return;
+    var sh = ss.getSheetByName(REF.SETTINGS.FORECAST_SHEET);
+    var out = { fbsUnits: 0, fboUnits: 0, fbsDays: 0, fboDays: 0 };
+    if (!sh) return out;
 
-    var last = sh.getLastRow();
-    if (last < 2) return;
+    var lastRow = sh.getLastRow() || 1;
 
-    // Найти строку операции в S
-    var ops = sh.getRange(2, 19, last - 1, 1).getDisplayValues(); // S
-    var rowIndex = -1;
-    for (var i = 0; i < ops.length; i++) {
-      if (String(ops[i][0] || '').trim() === String(opLabel || '').trim()) { rowIndex = i + 2; break; }
-    }
-    if (rowIndex === -1) return;
-
-    // Формат времени: dd.MM HH:mm (с ведущими нулями)
-    var tz = ss.getSpreadsheetTimeZone() || 'Etc/GMT';
-    var stamp = Utilities.formatDate(new Date(), tz, 'dd.MM HH:mm');
-
-    // Если есть platformHint — нормализуем и используем как фильтр читателя кратких имён
-    var want = String(platformHint || '').trim().toUpperCase();
-    if (want === 'OZ') want = 'OZON';
-    if (want === 'WB') want = 'WILDBERRIES';
-
-    var seen = new Set(), out = [];
-    var arr = Array.isArray(cabinetsArray) ? cabinetsArray : (cabinetsArray ? [cabinetsArray] : []);
-
-    // Карта кратких имен с опциональным фильтром по площадке
-    var shortMap = REF.readCabinetShortNameMap(want || undefined);
-
-    for (var k = 0; k < arr.length; k++) {
-      var full = REF.normCabinet(arr[k]);
-      if (!full) continue;
-
-      // Если фильтр задан — возьмём из карты с фильтром.
-      // Если по каким-то причинам не нашли, используем исходное имя.
-      var shortName = shortMap.get(full);
-      if (!shortName) {
-        // Фолбэк: без фильтра (на случай, если в Params нет строки с такой площадкой)
-        shortName = REF.getCabinetShortName(full, undefined) || full;
+    // 1) Найти заголовок блока по merged-диапазонам B:C
+    var titleRow = -1;
+    try {
+      var merged = sh.getMergedRanges() || [];
+      for (var i = 0; i < merged.length; i++) {
+        var r = merged[i];
+        if (r.getColumn() !== 2) continue;           // начинается в B
+        if (r.getNumColumns() < 2) continue;         // должен покрывать C
+        var txt = String(r.getDisplayValue() || '').trim();
+        if (!txt) continue;
+        for (var t = 0; t < REF.SETTINGS.MIN_STOCK_TITLES.length; t++) {
+          if (txt === REF.SETTINGS.MIN_STOCK_TITLES[t]) {
+            titleRow = r.getRow();
+            break;
+          }
+        }
+        if (titleRow > 0) break;
       }
+    } catch (_) {}
 
-      if (!seen.has(shortName)) {
-        seen.add(shortName);
-        out.push(shortName);
+    // Фолбэк: если не нашли по merge, ищем точное совпадение текста в B
+    if (titleRow <= 0) {
+      var findTitles = REF.SETTINGS.MIN_STOCK_TITLES;
+      var scanRows = Math.min(lastRow, 200);
+      var colB = sh.getRange(1, 2, scanRows, 1).getDisplayValues(); // B1:Bscan
+      outer:
+      for (var r2 = 1; r2 <= scanRows; r2++) {
+        var v = String(colB[r2 - 1][0] || '').trim();
+        if (!v) continue;
+        for (var tt = 0; tt < findTitles.length; tt++) {
+          if (v === findTitles[tt]) { titleRow = r2; break outer; }
+        }
       }
     }
 
-    sh.getRange(rowIndex, 20).setValue(stamp);     // T (Время)
-    sh.getRange(rowIndex, 21).setValue(out.join(', ')); // U (Кабинеты)
-  } catch (_){}
-};
+    if (titleRow <= 0 || titleRow >= lastRow) return out;
 
+    // 2) Собрать подряд непустые строки меток в B и значения в C
+    var row = titleRow + 1;
+    var options = []; // {label, valueRaw}
+    while (row <= lastRow) {
+      var label = String(sh.getRange(row, 2).getDisplayValue() || '').trim(); // B
+      if (!label) break;
+      var valRaw = sh.getRange(row, 3).getDisplayValue();                     // C
+      options.push({ label: label, valueRaw: valRaw });
+      row++;
+    }
 
+    if (!options.length) return out;
+
+    function toNum(x) { return REF.toNumber ? REF.toNumber(x) : (parseFloat(String(x).replace(',', '.')) || 0); }
+
+    for (var i2 = 0; i2 < options.length; i2++) {
+      var key = options[i2].label;
+      var val = toNum(options[i2].valueRaw);
+
+      if (key === 'FBS, шт')   out.fbsUnits = isFinite(val) ? val : 0;
+      else if (key === 'FBO, шт')   out.fboUnits = isFinite(val) ? val : 0;
+      else if (key === 'FBS, дней') out.fbsDays  = isFinite(val) ? val : 0;
+      else if (key === 'FBO, дней') out.fboDays  = isFinite(val) ? val : 0;
+    }
+    return out;
+  };
 
   return REF;
 })();

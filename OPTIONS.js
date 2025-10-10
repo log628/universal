@@ -227,7 +227,7 @@ const FONT_INACTIVE_SIZE = 9;
     } else {
       rng
         .setFontWeight('normal')
-        
+              .setFontSize(FONT_INACTIVE_SIZE)   // ← 9
         .setFontColor(TXT_INACTIVE)
         .setBackground(BG_INACTIVE);
     }

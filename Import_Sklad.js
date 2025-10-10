@@ -3,16 +3,19 @@
  *  ===============================
  * Делает:
  *  1) Читает токен МС из 🍔 СС!AG2
- *  2) Тянет ассортимент из МойСклад (Код/Производитель/Модель/Вес)
+ *  2) Тянет ассортимент из МойСклад (Код/Производитель/Модель/Вес/Выключен)
  *  3) Выгружает склады в 🍔 СС!AI:AL (Склад/Код/Доступно/Ожидание)
  *  4) Собирает «Приёмки» (внешний файл), берёт Очередность=1
  *  5) Считает комплекты (O:Q):
  *      - СС в валюте (юань) = Σ(СС(состав, юань) * кол-во)
- *      - Наличие/В пути/В поставке = min_i floor(карман(part_i)/qty_i)
+ *      - Наличие = min_i floor(наличие(part_i)/qty_i)   ← ТОЛЬКО ДЛЯ «Наличие»
+ *      - «В пути», «В поставке OZ», «В поставке WB» — только прямые (без комплектов)
  *  6) Считает «СС+Упак+Дост»:
  *      - СС (руб) + Упаковка (руб, из Y) + Доставка(вес_кг * тариф$ * курс$ *1.1)
  *        (вес берём в граммах → кг; тариф «доставка» и «доллар» из L:M)
- *  7) Пишет итог в 🍔 СС!A:J (последняя колонка — подробный расчёт)
+ *  7) Пишет итог в 🍔 СС!A:J
+ *       A:Товар B:Производитель C:Модель D:СС в валюте E:Валюта
+ *       F:СС+Упак+Дост G:Наличие H:В пути I:В поставке J:Не закупается
  */
 
 const RECIEVES_SPREADSHEET_ID = '1wX4N41BDVBEJ4UUOdO2bZAhYZG7TaJuOMReI6g473aE';
@@ -33,19 +36,20 @@ function Import_Sklad() {
 
     // === 1) Ассортимент из МС
     const ms  = new MoySklad(token);
-    const prods = fetchProductsFromMS_(ms); // [{code, manufacturer, model, weightRaw}]
+    const prods = fetchProductsFromMS_(ms); // [{code, manufacturer, model, weightRaw, disabled}]
     const prodByCode = {};
     for (const p of prods) {
       prodByCode[p.code] = {
         manufacturer: p.manufacturer || '',
         model: p.model || '',
-        weightRaw: ('weightRaw' in p ? p.weightRaw : '')
+        weightRaw: ('weightRaw' in p ? p.weightRaw : ''),
+        disabled: !!p.disabled
       };
     }
 
     // === 2) Выгрузка складов → 🍔 СС!AI:AL
     const stockRows = exportStocksToCC_(ms, shCC); // [ [store, code, available, inTransit], ... ]
-    const stockAgg  = aggregateStocks_(stockRows); // code -> {availMain, transitMain, availWB}
+    let stockAgg  = aggregateStocks_(stockRows);    // code -> {availMain, transitMain, vpostOZ, vpostWB}
 
     // === 3) Курсы L:M (юань/доллар/доставка)
     const lastRowCC = shCC.getLastRow();
@@ -128,19 +132,23 @@ function Import_Sklad() {
       if (ok) priceByCode[kit] = { costDoc: sumYuan, curr: 'юань' };
     }
 
-    // === 9) Комплектные количества (min floor)
-    const kitStocks = computeKitStocks_(kits, stockAgg);
-    Object.keys(kitStocks).forEach(kit => { stockAgg[kit] = kitStocks[kit]; });
+    // === 9) Комплектное «Наличие» (ТОЛЬКО availMain!)
+    // «В пути», «В поставке OZ/WB» — ТОЛЬКО прямые значения из AI:AL.
+    stockAgg = applyKitAvailOnly_(kits, stockAgg);
 
     // === 10) Сборка итоговых строк A:J
-    const HEADER = ['Товар','Производитель','Модель','СС в валюте','Валюта','СС+Упак+Дост','Наличие','В пути','В поставке','Расчёт'];
+    const HEADER = [
+      'Товар','Производитель','Модель','СС в валюте','Валюта',
+      'СС+Упак+Дост','Наличие','В пути','В поставке','Не закупается'
+    ];
 
-    const codes = Array.from(codeSet).filter(Boolean).sort((a,b)=>String(a).localeCompare(String(b)));
+    const codes = Array.from(codeSet).filter(Boolean)
+      .sort((a,b)=>String(a).localeCompare(String(b)));
     const out = [];
     for (const code of codes) {
-      const p = prodByCode[code] || {manufacturer:'', model:'', weightRaw:''};
+      const p = prodByCode[code] || {manufacturer:'', model:'', weightRaw:'', disabled:false};
       const r = priceByCode[code] || {costDoc:'', curr:''};
-      const s = stockAgg[code]    || {availMain:0, transitMain:0, availWB:0};
+      const s = stockAgg[code]    || {availMain:0, transitMain:0, vpostOZ:0, vpostWB:0};
 
       const curr = String(r.curr || '').toLowerCase();
       let costRub = '';
@@ -165,25 +173,16 @@ function Import_Sklad() {
       const baseRub = isFinite(toNum(costRub)) ? Number(costRub) : 0;
       const totalRub = baseRub + packAdd + deliveryRubFinal;
 
-      const calcDetail = [
-        `вескг=${weightKg}`,
-        `тариф$=${rateDeliveryUSD}`,
-        `дост$=${deliveryUSD}`,
-        `курс$=${usdRate}`,
-        `дост₽=${deliveryUSD * usdRate}`,
-        `*1.1=${deliveryRubFinal}`,
-        `СС₽=${baseRub}`,
-        `упак=${packAdd}`,
-        `итого₽=${totalRub}`
-      ].join(' | ');
+      // Новая логика колонок I и J:
+      const vPostavke = Number(s.vpostOZ || 0) + Number(s.vpostWB || 0); // I: «В поставке»
+const notPurchasingText = p.disabled ? 'да' : '';                                // J: «Не закупается» (из «Выключен»)
 
       out.push([
         code, p.manufacturer, p.model,
         r.costDoc === '' ? '' : Number(r.costDoc),
         curr || '',
         Number(totalRub),
-        s.availMain, s.transitMain, s.availWB,
-        calcDetail
+        s.availMain, s.transitMain, vPostavke, notPurchasingText
       ]);
     }
 
@@ -197,39 +196,34 @@ function Import_Sklad() {
     if (out.length) {
       shCC.getRange(2,4,out.length,1).setNumberFormat('#,##0.00'); // D
       shCC.getRange(2,6,out.length,1).setNumberFormat('#,##0.00'); // F
-      shCC.getRange(2,7,out.length,3).setNumberFormat('#,##0');    // G:H:I
+      shCC.getRange(2,7,out.length,3).setNumberFormat('#,##0');    // G:H:I (только числа)
+      // J: «Не закупается» — логическое; формат не задаём
     }
 
-    // === 12) Лог в «Обновления»: Склад + СС → Кабинеты: "МойСклад" (время — текущее)
+    // === 12) Лог в «Обновления»
     safeLogRun_MS_(['МойСклад']);
 
     ss.toast('Склад + СС: обновлено', 'Готово', 3);
     console.log(t(`END Import_Sklad | rows=${out.length}`));
   } catch (e) {
-    // логируем попытку (без кабинетов), чтобы в «Время» отразилось выполнение
     safeLogRun_MS_([]);
-    ss.toast('Склад + СС: ошибка, см. журнал', 'Ошибка', 6);
+    ss.toast('Склад + СС: ошибка, см. журнал', 6);
     console.error(t(`ERROR Import_Sklad: ${e && e.stack || e}`));
     throw e;
   }
 }
+
 function safeLogRun_MS_(cabs) {
   try {
     if (typeof REF !== 'undefined' && typeof REF.logRun === 'function') {
-      // Название блока для журнала: «Склад + СС»
-      // Кабинеты: массив, здесь всегда ["МойСклад"] (или [] при ошибке)
-      // Площадка: "MOYSKLAD" (произвольная метка, не влияет на отображение)
       REF.logRun('Склад + СС', Array.isArray(cabs) ? cabs : ['МойСклад'], 'MOYSKLAD');
     }
-  } catch (_) {
-    // молча игнорируем, чтобы не ломать основной процесс
-  }
+  } catch (_) {}
 }
-
 
 /* ================== Вспомогательные блоки ================== */
 
-// --- МС: ассортимент (code, manufacturer, model, weightRaw)
+// --- МС: ассортимент (code, manufacturer, model, weightRaw, disabled[«Выключен»])
 function fetchProductsFromMS_(ms) {
   const fin = [];
   const url = 'https://api.moysklad.ru/api/remap/1.2/entity/assortment?extend=attributes';
@@ -245,16 +239,19 @@ function fetchProductsFromMS_(ms) {
       for (const item of rows) {
         const code = item && item.code ? String(item.code) : '';
         if (!code) continue;
-        let manufacturer = '', model = '', weightRaw = '';
+        let manufacturer = '', model = '', weightRaw = '', disabled = false;
+
         const attrs = Array.isArray(item.attributes) ? item.attributes : [];
         for (const a of attrs) {
           if (!a || a.name == null) continue;
           if (a.name === 'Производитель' && 'value' in a) manufacturer = a.value;
           else if (a.name === 'Модель' && 'value' in a)   model = a.value;
           else if (a.name === 'Вес' && 'value' in a)      weightRaw = a.value; // граммы (как есть)
+          else if (a.name === 'Выключен' && 'value' in a) disabled = toBool(a.value);
         }
-        if (!weightRaw && item.weight != null) weightRaw = item.weight; // fallback (обычно кг — но мы трактуем как граммы? оставляем как есть)
-        fin.push({ code, manufacturer, model, weightRaw });
+        if (!weightRaw && item.weight != null) weightRaw = item.weight; // fallback
+
+        fin.push({ code, manufacturer, model, weightRaw, disabled });
       }
       if (rows.length < limit) break;
       offset += limit;
@@ -313,15 +310,18 @@ function exportStocksToCC_(ms, shCC) {
 // --- Агрегаты по складам из сырья AI:AL
 function aggregateStocks_(rows) {
   const MAIN = 'Основной склад';
-  const SUPP = 'В поставке WB';
-  const agg = {}; // code -> {availMain, transitMain, availWB}
+  const POZ  = 'В поставке OZ';
+  const PWB  = 'В поставке WB';
+  const agg = {}; // code -> {availMain, transitMain, vpostOZ, vpostWB}
   for (const [store, code, avail, wait] of rows) {
-    if (!agg[code]) agg[code] = { availMain:0, transitMain:0, availWB:0 };
+    if (!agg[code]) agg[code] = { availMain:0, transitMain:0, vpostOZ:0, vpostWB:0 };
     if (store === MAIN) {
       agg[code].availMain   += Number(avail) || 0;
       agg[code].transitMain += Number(wait)  || 0;
-    } else if (store === SUPP) {
-      agg[code].availWB     += Number(avail) || 0;
+    } else if (store === POZ) {
+      agg[code].vpostOZ     += Number(avail) || 0; // ТОЛЬКО «Доступно»
+    } else if (store === PWB) {
+      agg[code].vpostWB     += Number(avail) || 0; // ТОЛЬКО «Доступно»
     }
   }
   return agg;
@@ -344,33 +344,27 @@ function readKits_(shCC) {
   return res;
 }
 
-// --- Комплектные карманы по min floor
-function computeKitStocks_(kits, stockAgg) {
-  const result = {}; // kit -> {availMain, transitMain, availWB}
-  const INF = 1e15;
-
+// --- Применить комплектность ТОЛЬКО к «Наличие» (availMain)
+function applyKitAvailOnly_(kits, stockAgg) {
+  const out = Object.assign({}, stockAgg);
   for (const kit of Object.keys(kits)) {
-    let potAvail = INF, potTransit = INF, potWB = INF;
     const parts = kits[kit];
     if (!parts || !parts.length) continue;
+    let potAvail = Infinity;
 
     for (const {part, qty} of parts) {
-      const s = stockAgg[part] || {availMain:0, transitMain:0, availWB:0};
+      const s = out[part] || {availMain:0};
       const q = Number(qty) || 0;
-      if (q <= 0) { potAvail = 0; potTransit = 0; potWB = 0; break; }
-
-      potAvail   = Math.min(potAvail,   Math.floor((Number(s.availMain)   || 0) / q));
-      potTransit = Math.min(potTransit, Math.floor((Number(s.transitMain) || 0) / q));
-      potWB      = Math.min(potWB,      Math.floor((Number(s.availWB)     || 0) / q));
+      if (q <= 0) { potAvail = 0; break; }
+      const partAvail = Math.floor((Number(s.availMain) || 0) / q);
+      potAvail = Math.min(potAvail, partAvail);
     }
 
-    if (potAvail === INF)   potAvail = 0;
-    if (potTransit === INF) potTransit = 0;
-    if (potWB === INF)      potWB = 0;
-
-    result[kit] = { availMain: potAvail, transitMain: potTransit, availWB: potWB };
+    if (!isFinite(potAvail)) potAvail = 0;
+    if (!out[kit]) out[kit] = { availMain:0, transitMain:0, vpostOZ:0, vpostWB:0 };
+    out[kit].availMain = Math.max(0, potAvail | 0);
   }
-  return result;
+  return out;
 }
 
 // --- МС helpers (stores & assortment by store)
@@ -464,4 +458,10 @@ function clearBlock(sheet, row, col, numRows, numCols) {
 function toNum(x) {
   const n = Number(x);
   return isFinite(n) ? n : NaN;
+}
+// Логическое приведение для доп. поля «Выключен»
+function toBool(v) {
+  if (typeof v === 'boolean') return v;
+  const s = String(v).trim().toLowerCase();
+  return ['1','true','да','yes','y','on','выкл','disabled'].includes(s);
 }
