@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Проверка актуальности данных — Форкаст</title>
+  <title>Проверка актуальности данных — Калькулятор</title>
   <style>
     :root{ --ok:#38761d; --up:#bf9000; --fg:#222; --muted:#666; --line:#e5e5e5; --bg:#fff; --accent:#1c4587; --progress-bg:#eee; --err:#b22222; }
     *{ box-sizing:border-box }
@@ -39,11 +39,10 @@
   </style>
 </head>
 <body>
-
   <button id="focus-sink" class="focus-sink" aria-hidden="true" autofocus>•</button>
 
   <h1>Источники данных</h1>
-  <div class="hint">Если источник старше 12 часов, он будет обновлён перед расчётом. Обновляются только те, что устарели.</div>
+  <div class="hint">Если источник старше 12 часов, он будет обновлён перед расчётом.</div>
 
   <div class="card">
     <table aria-label="Источники">
@@ -70,12 +69,25 @@
   </div>
 
   <script>
-    const state = { sources:[], staleHours:12, running:false,
-                    animation:{ totalMs:10000, startedAt:0, timerId:0, freezeAt95:false } };
+    const state = {
+      sources: [],
+      staleHours: 12,
+      running: false,
+      animation: { totalMs: 10000, startedAt: 0, timerId: 0, freezeAt95: false }
+    };
 
-    function el(tag, props={}, children=[]){ const e=document.createElement(tag); Object.assign(e,props); (Array.isArray(children)?children:[children]).forEach(c=>e.appendChild(typeof c==='string'?document.createTextNode(c):c)); return e; }
+    function el(tag, props={}, children=[]){
+      const e=document.createElement(tag);
+      Object.assign(e,props);
+      (Array.isArray(children)?children:[children]).forEach(c=>e.appendChild(typeof c==='string'?document.createTextNode(c):c));
+      return e;
+    }
     function formatAgeLabel(ageHours){ if (ageHours == null) return ''; return ageHours < 1 ? 'менее часа' : (Math.floor(ageHours)+' ч'); }
-    function sourceLabel(key){ return key==='ozon'?'OZON':(key==='wb'?'WILDBERRIES':'СКЛАД + СС'); }
+    function sourceLabel(key){
+      if (key==='price_oz') return 'Цены OZ';
+      if (key==='price_wb') return 'Цены WB';
+      return 'Склад + СС';
+    }
 
     function rowTemplate(s){
       const tr=el('tr',{id:'row-'+s.key});
@@ -99,7 +111,6 @@
     function setPhaseError(msg){ const e=document.getElementById('phase-error'); if(!e) return; e.textContent=msg||''; e.style.display = msg?'block':'none'; }
     function focusSink(){ try{ document.getElementById('focus-sink').focus({preventScroll:true}); }catch(_){ } }
 
-    // анимация прогресса (единая шкала)
     function startUnifiedBar(totalMs){
       state.animation.totalMs = Math.max(1000, totalMs|0);
       state.animation.startedAt = performance.now();
@@ -125,18 +136,16 @@
       google.script.run.withSuccessHandler(function(res){
         state.sources=res.sources; state.staleHours=res.staleHours; renderTable();
         startProcess();
-      }).withFailureHandler(function(e){ err.textContent='Ошибка чтения статусов: '+(e&&e.message?e.message:e); }).FD_getStatus();
+      }).withFailureHandler(function(e){ err.textContent='Ошибка чтения статусов: '+(e&&e.message?e.message:e); }).CD_getStatus();
     }
 
     function startProcess(){
       if (state.running) return; state.running=true;
 
-      // Обновляем только устаревшие (из всех трёх)
       const stale = state.sources.filter(s=>s.isStale);
       const expectSum = stale.reduce((a,s)=>a+(Number(s.expectSec)||0),0);
-      const totalSec  = stale.length ? (expectSum + 2 + 10) : 10;
+      const totalSec  = (stale.length ? (expectSum + 2 + 10) : 10);
 
-      // Текст фазы — суммарная оценка
       if (stale.length){
         setPhaseTitle('Актуализация источников (~'+expectSum+' сек)');
       } else {
@@ -157,18 +166,18 @@
           }).withFailureHandler(function(e){
             setPhaseError((e&&e.message)?e.message:String(e||'Ошибка обновления источника'));
             freezeBarAt95(); state.running=false;
-          }).FD_runSourceUpdate(s.key);
+          }).CD_runSourceUpdate(s.key);
         };
         next();
       };
 
       runSources(function(){
         const waitMs = stale.length ? 2000 : 0;
-        setTimeout(runForecast, waitMs);
+        setTimeout(runCalculator, waitMs);
       });
     }
 
-    function runForecast(){
+    function runCalculator(){
       setPhaseTitle('Формирование расчёта (~10 сек)');
       google.script.run.withSuccessHandler(function(){
         finishBarTo100();
@@ -178,7 +187,7 @@
         freezeBarAt95();
         setPhaseError((e&&e.message)?e.message:String(e||'Ошибка при формировании'));
         state.running=false;
-      }).FD_runBuildForecast();
+      }).CD_runBuildCalculator();
     }
 
     document.addEventListener('DOMContentLoaded', preloadAndRun);

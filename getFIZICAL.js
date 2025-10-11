@@ -20,18 +20,22 @@ function _fiz_colorMap(platformTag) {
 /* ---------- Публичные ---------- */
 function getFiz_OZ() {
   const ss = SpreadsheetApp.getActive();
-  const sh = ss.getSheetByName(_fiz_sheetName('FIZ_OZ', '[OZ] Физ. оборот')) || ss.insertSheet(_fiz_sheetName('FIZ_OZ','[OZ] Физ. оборот'));
+  const sheetTitle = _fiz_sheetName('FIZ_OZ','[OZ] Физ. оборот');
+  const sh = ss.getSheetByName(sheetTitle) || ss.insertSheet(sheetTitle);
 
   _fiz_prepareHeaderOnce(sh, 'OZ'); // шапка, ширины, заморозка
 
   // 1) Остатки → P:T
   const rStocks = _fiz_fillStocks_OZ(sh);
+  ss.toast('Остатки: ' + (rStocks.rows||0) + ' строк; кабинетов: ' + (rStocks.okCabs||[]).length, sheetTitle, 3);
 
   // 2) Заказы → F:N (30 дней до конца вчера)
   const rOrders = _fiz_fillOrders_OZ(sh);
+  ss.toast('Заказы (30д): ' + (rOrders.rows||0) + ' строк; кабинетов: ' + (rOrders.okCabs||[]).length, sheetTitle, 3);
 
   // 3) Основной блок A:D по «Артикулам» + вычисление скоростей и остатков
   const rows = _fiz_buildMainBlockFromRefs(sh, 'OZ');
+  ss.toast('Скорость рассчитана для ' + rows + ' артикулов', sheetTitle, 3);
 
   // Лог кабинетов в ⚙️Параметры
   try {
@@ -43,23 +47,26 @@ function getFiz_OZ() {
   } catch (_){}
 
   SpreadsheetApp.flush();
-  ss.toast('OZ обновлён: строк ' + rows, _fiz_sheetName('FIZ_OZ','[OZ] Физ. оборот'), 3);
 }
 
 function getFiz_WB() {
   const ss = SpreadsheetApp.getActive();
-  const sh = ss.getSheetByName(_fiz_sheetName('FIZ_WB', '[WB] Физ. оборот')) || ss.insertSheet(_fiz_sheetName('FIZ_WB','[WB] Физ. оборот'));
+  const sheetTitle = _fiz_sheetName('FIZ_WB','[WB] Физ. оборот');
+  const sh = ss.getSheetByName(sheetTitle) || ss.insertSheet(sheetTitle);
 
   _fiz_prepareHeaderOnce(sh, 'WB'); // шапка, ширины, заморозка
 
   // 1) Остатки → P:T
   const rStocks = _fiz_fillStocks_WB(sh);
+  ss.toast('Остатки: ' + (rStocks.rows||0) + ' строк; кабинетов: ' + (rStocks.okCabs||[]).length, sheetTitle, 3);
 
   // 2) Заказы → F:N
   const rOrders = _fiz_fillOrders_WB(sh);
+  ss.toast('Заказы (30д): ' + (rOrders.rows||0) + ' строк; кабинетов: ' + (rOrders.okCabs||[]).length, sheetTitle, 3);
 
   // 3) Основной блок A:D
   const rows = _fiz_buildMainBlockFromRefs(sh, 'WB');
+  ss.toast('Скорость рассчитана для ' + rows + ' артикулов', sheetTitle, 3);
 
   // Лог кабинетов
   try {
@@ -71,7 +78,6 @@ function getFiz_WB() {
   } catch (_){}
 
   SpreadsheetApp.flush();
-  ss.toast('WB обновлён: строк ' + rows, _fiz_sheetName('FIZ_WB','[WB] Физ. оборот'), 3);
 }
 
 /* =========================================================
@@ -91,7 +97,9 @@ function _fiz_prepareHeaderOnce(sh, platform /* 'OZ'|'WB' */) {
   sh.setRowHeight(1, 22);
 
   // --- A:D ---
-  const H = (platform === 'OZ') ? REF.FIZ.OZ.HEADERS_AI : REF.FIZ.WB.HEADERS_AI;
+  const headerTag = (platform === 'OZ') ? '[ OZ ] Кабинет' : '[ WB ] Кабинет';
+  const H = [headerTag, 'Артикул', 'Остаток', 'Скорость'];
+
   sh.getRange(1, 1, 1, 4).setValues([H]).setFontColor('#ffffff');
   sh.getRange(1, 1, 1, 2).setBackground('#434343'); // A:B
   sh.getRange(1, 3, 1, 1).setBackground('#38761d'); // C «Остаток»

@@ -1,3 +1,4 @@
+/** ===================== getREFRESH_OZ (обновлённая) ===================== */
 function getREFRESH_OZ() {
   var ss = SpreadsheetApp.getActive();
   var T0 = Date.now();
@@ -37,9 +38,8 @@ function getREFRESH_OZ() {
     trimRowsAfter_(sh0, 1);
     ss.toast('Нет префиксов в ⚙️ Параметры!P — выгрузка пуста', 'Готово', 5);
     log('END', 'no prefixes -> 0 rows');
-    try { REF.logRun('Артикулы OZ', [], 'OZ'); } catch(_){}
-  triggerRebuildIfOZ_();                 // ← ДОБАВИТЬ
-
+    try { REF.logRun('Артикулы OZ', [], 'OZON'); } catch(_){}
+    try { REF.logRun('Цены OZ',      [], 'OZON'); } catch(_){}
     return;
   }
 
@@ -55,9 +55,8 @@ function getREFRESH_OZ() {
     trimRowsAfter_(sh, 1);
     ss.toast('В ⚙️ Параметры ни один OZON-кабинет не отмечен', 'Нет выбора', 5);
     log('END', 'no selected cabinets');
-    try { REF.logRun('Артикулы OZ', [], 'OZ'); } catch(_){}
-
-      triggerRebuildIfOZ_();                 // ← ДОБАВИТЬ
+    try { REF.logRun('Артикулы OZ', [], 'OZON'); } catch(_){}
+    try { REF.logRun('Цены OZ',      [], 'OZON'); } catch(_){}
     return;
   }
 
@@ -90,51 +89,45 @@ function getREFRESH_OZ() {
       try { skuFallbackMap = api.getSkusByOffers(missingForSku) || {}; } catch (_) { skuFallbackMap = {}; }
     }
 
-var cats = {};
-try { cats = api.getCategoryTreeRU() || {}; } catch(_) { cats = {}; }
-var byCategoryId     = cats.byCategoryId || {};
-var byTypeId         = cats.byTypeId || {};
-var typeNameByTypeId = cats.typeNameByTypeId || {};
+    var cats = {};
+    try { cats = api.getCategoryTreeRU() || {}; } catch(_) { cats = {}; }
+    var byCategoryId     = cats.byCategoryId || {};
+    var byTypeId         = cats.byTypeId || {};
+    var typeNameByTypeId = cats.typeNameByTypeId || {};
 
-function pickCategoryAndType_(det) {
-  var cid = det && (det.category_id || det.description_category_id);
-  var tid = det && det.type_id;
+    function pickCategoryAndType_(det) {
+      var cid = det && (det.category_id || det.description_category_id);
+      var tid = det && det.type_id;
 
-  var category = '';
-  if (cid != null && byCategoryId[String(cid)]) {
-    category = byCategoryId[String(cid)];
-  } else if (tid != null && byTypeId[String(tid)]) {
-    category = byTypeId[String(tid)];
-  }
+      var category = '';
+      if (cid != null && byCategoryId[String(cid)]) {
+        category = byCategoryId[String(cid)];
+      } else if (tid != null && byTypeId[String(tid)]) {
+        category = byTypeId[String(tid)];
+      }
 
-  var typeName = (tid != null && typeNameByTypeId[String(tid)]) ? typeNameByTypeId[String(tid)] : '';
-  return { category: category, typeName: typeName };
-}
-
-function pickCommissions_(det) {
-  var fboPct = '', fbsPct = '', rfbsPct = '';
-  var arr = det && Array.isArray(det.commissions) ? det.commissions : [];
-
-  // универсальный парсер числа (если есть REF.toNumber — используем его)
-  var toNum = (typeof REF !== 'undefined' && typeof REF.toNumber === 'function')
-    ? REF.toNumber
-    : function(v){ return Number(String(v).replace(',', '.')); };
-
-  for (var i = 0; i < arr.length; i++) {
-    var c = arr[i];
-    var v = (c && c.percent != null) ? toNum(c.percent) : NaN;
-    if (!isNaN(v)) {
-      v = v + 5; // ← добавляем +5 п.п. ДЛЯ ВСЕХ схем
-      if (c.sale_schema === 'FBO')  fboPct  = v;
-      if (c.sale_schema === 'FBS')  fbsPct  = v;
-      if (c.sale_schema === 'RFBS') rfbsPct = v;
+      var typeName = (tid != null && typeNameByTypeId[String(tid)]) ? typeNameByTypeId[String(tid)] : '';
+      return { category: category, typeName: typeName };
     }
-  }
-  return { fboPct: fboPct, fbsPct: fbsPct, rfbsPct: rfbsPct };
-}
 
-
-
+    function pickCommissions_(det) {
+      var fboPct = '', fbsPct = '', rfbsPct = '';
+      var arr = det && Array.isArray(det.commissions) ? det.commissions : [];
+      var toNum = (typeof REF !== 'undefined' && typeof REF.toNumber === 'function')
+        ? REF.toNumber
+        : function(v){ return Number(String(v).replace(',', '.')); };
+      for (var i = 0; i < arr.length; i++) {
+        var c = arr[i];
+        var v = (c && c.percent != null) ? toNum(c.percent) : NaN;
+        if (!isNaN(v)) {
+          v = v + 5; // +5 п.п. для всех схем
+          if (c.sale_schema === 'FBO')  fboPct  = v;
+          if (c.sale_schema === 'FBS')  fbsPct  = v;
+          if (c.sale_schema === 'RFBS') rfbsPct = v;
+        }
+      }
+      return { fboPct: fboPct, fbsPct: fbsPct, rfbsPct: rfbsPct };
+    }
 
     function pickSku_(det, offer) {
       return (det && (det.sku || det.sku_id || det.id)) || skuFallbackMap[offer] || '';
@@ -168,27 +161,26 @@ function pickCommissions_(det) {
       var sec   = resolveSection_(offer);
       if (!sec) continue;
 
-var cm = pickCommissions_(det);
-var ct = pickCategoryAndType_(det);
-var catCell = ct.category || '';
-if (ct.typeName) catCell += ' | ' + ct.typeName;
+      var cm = pickCommissions_(det);
+      var ct = pickCategoryAndType_(det);
+      var catCell = ct.category || '';
+      if (ct.typeName) catCell += ' | ' + ct.typeName;
 
-rows.push([
-  cabKey,                                        // A
-  offer,                                         // B
-  csv['Отзывы'] || '',                           // C
-  String(csv['Рейтинг'] || '').replace(/\./g,','), // D
-  catCell,                                       // E  <-- теперь "Категория | Тип"
-  cm.fboPct,                                     // F
-  cm.fbsPct,                                     // G
-  cm.rfbsPct,                                    // H
-  calcVolumeLitersFromCsv_(csv),                 // I
-  pickPriceFromCsv_(csv),                        // J
-  pickSku_(det, offer),                          // K
-  'X',                                           // L
-  sec.ownCat || ''                               // M
-]);
-
+      rows.push([
+        cabKey,                                        // A
+        offer,                                         // B
+        csv['Отзывы'] || '',                           // C
+        String(csv['Рейтинг'] || '').replace(/\./g,','), // D
+        catCell,                                       // E
+        cm.fboPct,                                     // F
+        cm.fbsPct,                                     // G
+        cm.rfbsPct,                                    // H
+        calcVolumeLitersFromCsv_(csv),                 // I
+        pickPriceFromCsv_(csv),                        // J
+        pickSku_(det, offer),                          // K
+        'X',                                           // L
+        sec.ownCat || ''                               // M
+      ]);
     }
     return rows;
   }
@@ -220,10 +212,9 @@ rows.push([
   ss.toast('Готово! Обновлено ' + (allRows.length || 0) + ' строк (OZON)', DST_SHEET, 5);
   log('END', 'totalRows=' + (allRows.length || 0));
 
-  // ===== 5) ЛОГ — только успешные кабинеты
-try { REF.logRun('Артикулы OZ', successCabs, 'OZON'); } catch(_){}
-
-triggerRebuildIfOZ_();                   // ← ДОБАВИТЬ
+  // ===== 5) Штампы: и «Артикулы OZ», и «Цены OZ»
+  try { REF.logRun('Артикулы OZ', successCabs, 'OZON'); } catch(_){}
+  try { REF.logRun('Цены OZ',      successCabs, 'OZON'); } catch(_){}
 
   /* ==================== локальные хелперы ==================== */
   function ensureLayoutN_(ss, sheetName, headers, N) {
@@ -333,11 +324,11 @@ function getREFRESHprices_OZ() {
   if (last < 2) { ss.toast('Нет строк для обновления', 'OZON цены', 5); return; }
 
   var platTag = REF.getCurrentPlatform(); // 'OZ'|'WB'|null
-var shCalc = ss.getSheetByName(REF.SHEETS.CALC);
-var ctrlRange =
-  (REF && typeof REF.getCabinetControlRange === 'function' && REF.getCabinetControlRange()) ||
-  (shCalc ? shCalc.getRange(REF.CTRL_RANGE_A1) : null);
-var currentCab = ctrlRange ? String(ctrlRange.getDisplayValue() || '').trim() : '';
+  var shCalc = ss.getSheetByName(REF.SHEETS.CALC);
+  var ctrlRange =
+    (REF && typeof REF.getCabinetControlRange === 'function' && REF.getCabinetControlRange()) ||
+    (shCalc ? shCalc.getRange(REF.CTRL_RANGE_A1) : null);
+  var currentCab = ctrlRange ? String(ctrlRange.getDisplayValue() || '').trim() : '';
 
   var normCab = REF.normCabinet;
 
@@ -446,42 +437,12 @@ var currentCab = ctrlRange ? String(ctrlRange.getDisplayValue() || '').trim() : 
     }
   }
 
-  // ===== ЛОГ — только успешные кабинеты OZ
-try { REF.logRun('Цены OZ', successCabs, 'OZON'); } catch(_){}
+  // Лог шапки в ⚙️ Параметры (ставит штамп T)
+  try { REF.logRun('Цены OZ', successCabs, 'OZON'); } catch(_){}
 
   ss.toast('OZON цены: найдено ' + totalUpdated + ' из ' + totalTouched + ' строк; Параллель: +' + totalParUpdated, 'Готово', 5);
   log('END', 'updated=' + totalUpdated + ', touched=' + totalTouched + ', parallel=' + totalParUpdated);
-  triggerRebuildIfOZ_();                   // ← ДОБАВИТЬ
 }
 
-// === Перестроить калькулятор/параллель только если текущая платформа — OZON ===
-function triggerRebuildIfOZ_() {
-  try {
-    var plat = (REF && typeof REF.getCurrentPlatform === 'function') ? REF.getCurrentPlatform() : null;
-    if (plat !== 'OZ') return; // запускаем только на OZON
 
-    var ss = SpreadsheetApp.getActive();
-    var calcName = (REF && REF.SHEETS && REF.SHEETS.CALC) || '⚖️ Калькулятор';
-
-    var shCalc = ss.getSheetByName(calcName);
-    if (!shCalc) return;
-
-    // именованный диапазон/контрол кабинета
-    var ctrlRange =
-      (REF && typeof REF.getCabinetControlRange === 'function' && REF.getCabinetControlRange()) ||
-      shCalc.getRange(REF.CTRL_RANGE_A1);
-
-    var currentCab = String(ctrlRange.getDisplayValue() || '').trim();
-    if (!currentCab) return;
-
-    // универсальный раннер этого проекта — без кулдаунов
-    if (typeof runLayoutImmediate === 'function') {
-      runLayoutImmediate(currentCab);
-    } else {
-      // запасной путь (на всякий случай)
-      if (typeof layoutCalculator === 'function') layoutCalculator(currentCab, { plat: 'OZ' });
-      if (typeof layoutParallelInline_ === 'function') layoutParallelInline_(currentCab, { plat: 'OZ' });
-    }
-  } catch (_) { /* тихо */ }
-}
 

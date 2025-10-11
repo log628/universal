@@ -123,6 +123,16 @@ function platformUiLabel_(tag) {
 function runLayoutImmediate(selectedCab) {
   const T0 = Date.now();
   techLog_('BEGIN', T0, 'runLayoutImmediate');
+  // ── ПРЕФЛАЙТ «Цены OZ/WB»: если обе свежие — продолжаем; иначе покажем окно и выходим
+  try {
+    if (typeof CALC_preflightOrShowDialog === 'function') {
+      var okToProceed = CALC_preflightOrShowDialog(); // true → оба прайс-источника свежие
+      if (!okToProceed) {
+        techLog_('PRE', T0, 'dispatcher shown (prices stale)');
+        return; // окно выполнит обновления и затем само вызовет runLayoutImmediate()
+      }
+    }
+  } catch(_) { /* мягко игнорируем */ }
 
   const ss = SpreadsheetApp.getActive();
   const sh = ss.getSheetByName(SHEET_CALC);

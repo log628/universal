@@ -1,3 +1,4 @@
+/** ===================== getREFRESH_WB (обновлённая) ===================== */
 function getREFRESH_WB() {
   var ss = SpreadsheetApp.getActive();
   var T0 = Date.now();
@@ -36,8 +37,8 @@ function getREFRESH_WB() {
     trimRowsAfter_(sh0, 1);
     ss.toast('Нет префиксов в ⚙️ Параметры!P — выгрузка пуста', 'Готово', 5);
     log('END', 'no prefixes -> 0 rows');
-    try { REF.logRun('Артикулы WB', []); } catch(_){}
-     triggerRebuildIfWB_();    
+    try { REF.logRun('Артикулы WB', [], 'WILDBERRIES'); } catch(_){}
+    try { REF.logRun('Цены WB',      [], 'WILDBERRIES'); } catch(_){}
     return;
   }
 
@@ -53,8 +54,8 @@ function getREFRESH_WB() {
     trimRowsAfter_(sh, 1);
     ss.toast('В ⚙️ Параметры ни один WB-кабинет не отмечен', 'Нет выбора', 5);
     log('END', 'no selected cabinets');
-    try { REF.logRun('Артикулы WB', []); } catch(_){}
-      triggerRebuildIfWB_(); 
+    try { REF.logRun('Артикулы WB', [], 'WILDBERRIES'); } catch(_){}
+    try { REF.logRun('Цены WB',      [], 'WILDBERRIES'); } catch(_){}
     return;
   }
 
@@ -111,29 +112,22 @@ function getREFRESH_WB() {
       pricesDict = list.reduce(function (acc, it) { acc[it.nmID] = it; return acc; }, {});
     } catch (e) { pricesDict = {}; log('WARN getPrices', cabName + ': ' + ((e && e.message) || e)); }
 
-// 3) Комиссии
-var commissionsDict = {};
-try {
-var report = withToken_(cabName, 'stats', function (api) { 
-  return api.getCategoryCommissions(); 
-}, 'getCategoryCommissions') || [];
-  for (var r = 0; r < report.length; r++) {
-    var rec = report[r];
-    var sid = (rec.subjectID != null ? rec.subjectID : rec.subjectId);
-    if (!sid) continue;
-
-    // >>> НОВОЕ СООТНЕСЕНИЕ ПОЛЕЙ:
-    // FBO  = paidStorageKgvp
-    // FBS  = kgvpMarketplace
-    // RFBS = kgvpBooking   (без изменений)
-    var FBO  = rec.paidStorageKgvp != null ? Number(rec.paidStorageKgvp) : '';
-    var FBS  = rec.kgvpMarketplace != null ? Number(rec.kgvpMarketplace) : '';
-    var RFBS = rec.kgvpBooking     != null ? Number(rec.kgvpBooking)     : '';
-
-    commissionsDict[String(sid)] = { FBO: FBO, FBS: FBS, RFBS: RFBS };
-  }
-} catch (e) { commissionsDict = {}; log('WARN commissions', cabName + ': ' + ((e && e.message) || e)); }
-
+    // 3) Комиссии (перекладка полей согласно новым названиям)
+    var commissionsDict = {};
+    try {
+      var report = withToken_(cabName, 'stats', function (api) {
+        return api.getCategoryCommissions();
+      }, 'getCategoryCommissions') || [];
+      for (var r = 0; r < report.length; r++) {
+        var rec = report[r];
+        var sid = (rec.subjectID != null ? rec.subjectID : rec.subjectId);
+        if (!sid) continue;
+        var FBO  = rec.paidStorageKgvp != null ? Number(rec.paidStorageKgvp) : '';
+        var FBS  = rec.kgvpMarketplace != null ? Number(rec.kgvpMarketplace) : '';
+        var RFBS = rec.kgvpBooking     != null ? Number(rec.kgvpBooking)     : '';
+        commissionsDict[String(sid)] = { FBO: FBO, FBS: FBS, RFBS: RFBS };
+      }
+    } catch (e) { commissionsDict = {}; log('WARN commissions', cabName + ': ' + ((e && e.message) || e)); }
 
     // 4) Черновики + сбор nmID
     var drafts = [], nmAll = [];
@@ -160,7 +154,7 @@ var report = withToken_(cabName, 'stats', function (api) {
       var price = (function (priceObj) {
         try {
           var p = priceObj && Array.isArray(priceObj.sizes) && priceObj.sizes[0] ? priceObj.sizes[0] : null;
-          var v = (p && (p.price || p.clubDiscountedPrice || p.discountedPrice || p.basicSalePrice || p.basicPrice)) || '';
+        var v = (p && (p.price || p.clubDiscountedPrice || p.discountedPrice || p.basicSalePrice || p.basicPrice)) || '';
           return (v === '' ? '' : String(v).replace('.', ','));
         } catch(_) { return ''; }
       })(pricesDict[nmID]);
@@ -206,19 +200,19 @@ var report = withToken_(cabName, 'stats', function (api) {
       var feedback = (r.feedbacks != null ? r.feedbacks : (r.feedbackCount != null ? r.feedbackCount : '')) || '';
       var cm = (rec.subjectId != null) ? (commissionsDict[String(rec.subjectId)] || {}) : {};
       rows.push([
-        rec.cabName,           // A
-        rec.vendor,            // B (Артикул продавца)
-        (feedback || '0'),     // C
-        (rating  || '0'),      // D
+        rec.cabName,             // A
+        rec.vendor,              // B
+        (feedback || '0'),       // C
+        (rating  || '0'),        // D
         (rec.subjectName || ''), // E
         (cm.FBO  == null ? '' : cm.FBO),   // F
         (cm.FBS  == null ? '' : cm.FBS),   // G
         (cm.RFBS == null ? '' : cm.RFBS),  // H
-        rec.vol,               // I
-        rec.price,             // J
-        rec.nm,                // K (nmID)
-        rec.section,           // L
-        rec.ownCat             // M
+        rec.vol,                 // I
+        rec.price,               // J
+        rec.nm,                  // K
+        rec.section,             // L
+        rec.ownCat               // M
       ]);
     }
     return rows;
@@ -253,9 +247,9 @@ var report = withToken_(cabName, 'stats', function (api) {
   ss.toast('Готово! Обновлено ' + (allRows.length || 0) + ' строк (WB)', DST_SHEET, 5);
   log('END', 'totalRows=' + (allRows.length || 0));
 
-  // ===== 5) ЛОГ — только успешные кабинеты (платформа независима от muff_mp)
+  // ===== 5) Штампы: и «Артикулы WB», и «Цены WB»
   try { REF.logRun('Артикулы WB', successCabs, 'WILDBERRIES'); } catch(_){}
-  triggerRebuildIfWB_();  
+  try { REF.logRun('Цены WB',      successCabs, 'WILDBERRIES'); } catch(_){}
 
   /* ========================= ХЕЛПЕРЫ ========================= */
 
@@ -279,16 +273,15 @@ var report = withToken_(cabName, 'stats', function (api) {
   }
 
   function paintHeaderBlocks_WB_(sh, HEADERS_) {
-    sh.getRange(1,  1, 1, 2).setBackground('#434343'); // A:B — Кабинет, Артикул
-    sh.getRange(1,  3, 1, 2).setBackground('#1c4587'); // C:D — Отзывы, Рейтинг
-    sh.getRange(1,  5, 1, 1).setBackground('#274e13'); // E   — Категория
-    sh.getRange(1,  6, 1, 3).setBackground('#6aa84f'); // F:H — FBO,FBS,RFBS
-    sh.getRange(1,  9, 1, 1).setBackground('#7f6000'); // I   — Объем
-    sh.getRange(1, 10, 1, 1).setBackground('#990000'); // J   — Цена
-    sh.getRange(1, 11, 1, 1).setBackground('#333333'); // K   — nmID
-    sh.getRange(1, 12, 1, 2).setBackground('#5b0f00'); // L:M — Раздел, Своя категория
+    sh.getRange(1,  1, 1, 2).setBackground('#434343'); // A:B
+    sh.getRange(1,  3, 1, 2).setBackground('#1c4587'); // C:D
+    sh.getRange(1,  5, 1, 1).setBackground('#274e13'); // E
+    sh.getRange(1,  6, 1, 3).setBackground('#6aa84f'); // F:H
+    sh.getRange(1,  9, 1, 1).setBackground('#7f6000'); // I
+    sh.getRange(1, 10, 1, 1).setBackground('#990000'); // J
+    sh.getRange(1, 11, 1, 1).setBackground('#333333'); // K
+    sh.getRange(1, 12, 1, 2).setBackground('#5b0f00'); // L:M
 
-    // Жёлтый тег "[ WB ]" в A1
     try {
       var a1Text = HEADERS_[0]; // "[ WB ] Кабинет"
       var tagEnd = a1Text.indexOf(']') + 1;
@@ -336,7 +329,7 @@ var report = withToken_(cabName, 'stats', function (api) {
     sh.setColumnWidth(2, w + 30);
   }
 
-  // Читает «⚙️ Параметры»: A=Кабинет, D=Площадка/Тип, H=чекбокс (TRUE/FALSE), фильтр: D in {"WILDBERRIES","WB"}
+  // Читает «⚙️ Параметры»: A=Кабинет, D=Площадка, H=чекбокс (TRUE/FALSE), фильтр WB
   function getSelectedCabinetsFromParams_WB_() {
     var sh = ss.getSheetByName(PARAM_SHEET);
     if (!sh) return { list: [], total: 0 };
@@ -359,6 +352,7 @@ var report = withToken_(cabName, 'stats', function (api) {
 
 
 
+
 function getREFRESHprices_WB() {
   var ss = SpreadsheetApp.getActive();
   var T0 = Date.now();
@@ -374,11 +368,11 @@ function getREFRESHprices_WB() {
   if (last < 2) { ss.toast('Нет строк для обновления', 'WB цены', 5); return; }
 
   var platTag = REF.getCurrentPlatform(); // 'OZ'|'WB'|null
-var shCalc = ss.getSheetByName(REF.SHEETS.CALC);
-var ctrlRange =
-  (REF && typeof REF.getCabinetControlRange === 'function' && REF.getCabinetControlRange()) ||
-  (shCalc ? shCalc.getRange(REF.CTRL_RANGE_A1) : null);
-var currentCab = ctrlRange ? String(ctrlRange.getDisplayValue() || '').trim() : '';
+  var shCalc = ss.getSheetByName(REF.SHEETS.CALC);
+  var ctrlRange =
+    (REF && typeof REF.getCabinetControlRange === 'function' && REF.getCabinetControlRange()) ||
+    (shCalc ? shCalc.getRange(REF.CTRL_RANGE_A1) : null);
+  var currentCab = ctrlRange ? String(ctrlRange.getDisplayValue() || '').trim() : '';
 
   var normCab = REF.normCabinet;
 
@@ -402,46 +396,43 @@ var currentCab = ctrlRange ? String(ctrlRange.getDisplayValue() || '').trim() : 
 
   // Токены WB
   var roleMap = REF.buildWBTokenMapFromParams();
-function withToken_(cabName, preferredRole, callFn, tag) {
-  var rec = roleMap.get(cabName) || { prices: [], content: [], stats: [], supplies: [], any: [] };
+  function withToken_(cabName, preferredRole, callFn, tag) {
+    var rec = roleMap.get(cabName) || { prices: [], content: [], stats: [], supplies: [], any: [] };
 
-  // приоритетный порядок подбора токена
-  var order = [];
-  if (preferredRole) order.push(preferredRole);
-  order = order.concat(['stats','prices','content','supplies','any']);
+    var order = [];
+    if (preferredRole) order.push(preferredRole);
+    order = order.concat(['stats','prices','content','supplies','any']);
 
-  // собираем кандидатов без дублей
-  var pools = [], seen = new Set();
-  for (var i = 0; i < order.length; i++) {
-    var role = order[i];
-    var arr = rec[role] || [];
-    for (var j = 0; j < arr.length; j++) {
-      var tk = arr[j];
-      if (!tk || seen.has(tk)) continue;
-      seen.add(tk);
-      pools.push(tk);
+    var pools = [], seen = new Set();
+    for (var i = 0; i < order.length; i++) {
+      var role = order[i];
+      var arr = rec[role] || [];
+      for (var j = 0; j < arr.length; j++) {
+        var tk = arr[j];
+        if (!tk || seen.has(tk)) continue;
+        seen.add(tk);
+        pools.push(tk);
+      }
     }
-  }
-  if (!pools.length) throw new Error('Нет токенов ни в одной роли для «' + cabName + '»');
+    if (!pools.length) throw new Error('Нет токенов ни в одной роли для «' + cabName + '»');
 
-  var errs = [];
-  for (var k = 0; k < pools.length; k++) {
-    var tk = pools[k];
-    try {
-      var t0 = Date.now();
-      var api = new WB(tk);
-      var res = callFn(api, tk);
-      log('API ' + tag + ' OK', 'cab=' + cabName + ', token#=' + (k + 1) + ', ' + (Date.now() - t0) + 'ms');
-      return res;
-    } catch (e) {
-      var msg = (e && e.message) ? e.message : String(e);
-      errs.push(msg);
-      log('API ' + tag + ' FAIL', 'cab=' + cabName + ', token#=' + (k + 1) + ', err=' + msg);
+    var errs = [];
+    for (var k = 0; k < pools.length; k++) {
+      var tk = pools[k];
+      try {
+        var t0 = Date.now();
+        var api = new WB(tk);
+        var res = callFn(api, tk);
+        log('API ' + tag + ' OK', 'cab=' + cabName + ', token#=' + (k + 1) + ', ' + (Date.now() - t0) + 'ms');
+        return res;
+      } catch (e) {
+        var msg = (e && e.message) ? e.message : String(e);
+        errs.push(msg);
+        log('API ' + tag + ' FAIL', 'cab=' + cabName + ', token#=' + (k + 1) + ', err=' + msg);
+      }
     }
+    throw new Error('Кабинет «' + cabName + '»: ни один токен не сработал для ' + tag + '. Errs: ' + errs.join(' | '));
   }
-  throw new Error('Кабинет «' + cabName + '»: ни один токен не сработал для ' + tag + '. Errs: ' + errs.join(' | '));
-}
-
 
   var totalTouched = 0, totalUpdated = 0, totalParUpdated = 0;
   var successCabs = [];
@@ -489,7 +480,6 @@ function withToken_(cabName, preferredRole, callFn, tag) {
 
     // «⛓️ Параллель» — только если платформа=WB и кабинет совпал
     if (platTag === 'WB' && currentCab && normCab(cab) === normCab(currentCab)) {
-      // Построим «Артикул -> nmID» для ЭТОГО кабинета
       var art2nm = {};
       for (var i2 = 0; i2 < rngA.length; i2++) {
         if (normCab(rngA[i2][0]) !== cab) continue;
@@ -526,38 +516,10 @@ function withToken_(cabName, preferredRole, callFn, tag) {
     }
   }
 
-  // ===== ЛОГ — только успешные WB-кабинеты (без завязки на muff_mp)
-try { REF.logRun('Цены WB', successCabs, 'WILDBERRIES'); } catch(_){}
+  // Лог шапки в ⚙️ Параметры (ставит штамп T)
+  try { REF.logRun('Цены WB', successCabs, 'WILDBERRIES'); } catch(_){}
 
   ss.toast('WB цены: обновлено ' + totalUpdated + ' / ' + totalTouched + '; Параллель: +' + totalParUpdated, 'Готово', 5);
   log('END', 'updated=' + totalUpdated + ', touched=' + totalTouched + ', parallel=' + totalParUpdated);
-  triggerRebuildIfWB_();  
 }
 
-
-// === Перестроить калькулятор/параллель только если текущая платформа — WB ===
-function triggerRebuildIfWB_() {
-  try {
-    var plat = (REF && typeof REF.getCurrentPlatform === 'function') ? REF.getCurrentPlatform() : null;
-    if (plat !== 'WB') return; // запускаем только на WILDBERRIES
-
-    var ss = SpreadsheetApp.getActive();
-    var shCalc = ss.getSheetByName((REF && REF.SHEETS && REF.SHEETS.CALC) || '⚖️ Калькулятор');
-    if (!shCalc) return;
-
-    var ctrlRange =
-      (REF && typeof REF.getCabinetControlRange === 'function' && REF.getCabinetControlRange()) ||
-      shCalc.getRange(REF.CTRL_RANGE_A1);
-
-    var currentCab = String(ctrlRange.getDisplayValue() || '').trim();
-    if (!currentCab) return;
-
-    if (typeof runLayoutImmediate === 'function') {
-      runLayoutImmediate(currentCab); // getform.gs сам возьмёт текущую платформу
-    } else {
-      // запасной путь (если раннера нет)
-      if (typeof layoutCalculator === 'function') layoutCalculator(currentCab, { plat: 'WB' });
-      if (typeof layoutParallelInline_ === 'function') layoutParallelInline_(currentCab, { plat: 'WB' });
-    }
-  } catch (_) { /* тихо */ }
-}
