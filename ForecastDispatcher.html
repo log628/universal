@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Проверка актуальности данных — Форкаст</title>
+  <style>
+    :root{ --ok:#38761d; --up:#bf9000; --fg:#222; --muted:#666; --line:#e5e5e5; --bg:#fff; --accent:#1c4587; --progress-bg:#eee; --err:#b22222; }
+    *{ box-sizing:border-box }
+    html,body{ height:100% }
+    body{ font-family:Roboto,system-ui,-apple-system,Segoe UI,Arial,sans-serif; color:var(--fg); background:var(--bg); margin:0; padding:10px; overflow:hidden; }
+
+    h1{ font-size:15px; margin:0 0 6px }
+    .hint{ color:var(--muted); font-size:10.5px; margin-bottom:6px }
+
+    .card{ border:1px solid var(--line); border-radius:10px; padding:0; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.03); overflow:hidden }
+
+    table{ width:100%; border-collapse:collapse; table-layout:fixed }
+    thead th, tbody td{ padding:6px 8px; border-bottom:1px solid var(--line); height:30px; vertical-align:middle; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+    thead th{ font-weight:600; font-size:10.5px; color:var(--muted); text-align:left }
+    tbody tr:last-child td{ border-bottom:none }
+    col.col-src{ width:160px }
+
+    .src{ font-weight:600; letter-spacing:.2px; font-size:12px }
+    .state{ font-size:12px }
+    .state.ok{ color:var(--ok); font-weight:700 }
+    .state.up{ color:var(--up); font-weight:700 }
+    .state.err{ color:var(--err); font-weight:700 }
+
+    .footer{ margin:6px; padding:8px; border:1px dashed var(--line); border-radius:10px; background:#fafafa }
+    .footer h2{ margin:0 0 6px; font-size:12px; font-weight:700; color:var(--accent) }
+
+    .progress{ position:relative; width:100%; height:6px; background:var(--progress-bg); border-radius:999px; overflow:hidden }
+    .progress .bar{ position:absolute; left:0; top:0; bottom:0; width:0%; background:linear-gradient(90deg,#8e7cc3,#6fa8dc); border-radius:999px; transition:width .12s linear }
+
+    .error{ margin:6px 6px 0; color:var(--err); font-size:11px }
+
+    /* Невидимая фокус-кнопка */
+    .focus-sink{ position:absolute; left:-9999px; top:auto; width:1px; height:1px; opacity:0; border:0; padding:0; background:transparent; color:transparent; }
+  </style>
+</head>
+<body>
+
+  <!-- невидимая «точечная» кнопка для фокуса -->
+  <button id="focus-sink" class="focus-sink" aria-hidden="true" autofocus>•</button>
+
+  <h1>Источники данных</h1>
+  <div class="hint">Если источник старше 12 часов, он будет обновлён перед расчётом.</div>
+
+  <div class="card">
+    <table aria-label="Источники">
+      <colgroup>
+        <col class="col-src" />
+        <col />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Источник</th>
+          <th>Свежесть</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+
+    <div class="footer" id="phase">
+      <h2 id="phase-title">Подготовка</h2>
+      <div class="progress"><div class="bar" id="phase-bar"></div></div>
+      <div class="error" id="phase-error" style="display:none"></div>
+    </div>
+
+    <div class="error" id="err"></div>
+  </div>
+
+  <script>
+    const state = { sources:[], staleHours:12, running:false,
+                    animation:{ totalMs:10000, startedAt:0, timerId:0, freezeAt95:false } };
+
+    /* ---------- helpers ---------- */
+    function el(tag, props={}, children=[]){ const e=document.createElement(tag); Object.assign(e,props); (Array.isArray(children)?children:[children]).forEach(c=>e.appendChild(typeof c==='string'?document.createTextNode(c):c)); return e; }
+    function formatAgeLabel(ageHours){ if (ageHours == null) return ''; return ageHours < 1 ? 'менее часа' : (Math.floor(ageHours)+' ч'); }
+    function sourceLabel(key){ return key==='ozon'?'OZON':(key==='wb'?'WILDBERRIES':'СКЛАД'); }
+
+    function rowTemplate(s){
+      const tr=el('tr',{id:'row-'+s.key});
+      const tdSrc=el('td',{className:'src'}, sourceLabel(s.key));
+      let cls, txt;
+      if (s.isStale){
+        cls='state up'; txt='Обновление…';  // ← секунд нет в строке
+      } else {
+        cls='state ok'; txt=(s.stampHuman||'—')+' | '+formatAgeLabel(s.ageHours||0);
+      }
+      const tdState=el('td',{className:cls,id:'state-'+s.key}, txt);
+      tr.appendChild(tdSrc); tr.appendChild(tdState);
+      return tr;
+    }
+    function renderTable(){ const tb=document.getElementById('tbody'); tb.innerHTML=''; state.sources.forEach(s=>tb.appendChild(rowTemplate(s))); }
+    function setRowUpdating(key){ const td=document.getElementById('state-'+key); if (td){ td.className='state up'; td.textContent='Обновление…'; } }
+    function setRowReady(key, stampHuman){ const td=document.getElementById('state-'+key); if (td){ td.className='state ok'; td.textContent=(stampHuman||'—')+' | менее часа'; } }
+
+    function setPhaseTitle(t){ document.getElementById('phase-title').textContent = t; }
+    function barTo(p){ const b=document.getElementById('phase-bar'); if (b) b.style.width=Math.max(0,Math.min(100,p))+'%'; }
+    function setPhaseError(msg){ const e=document.getElementById('phase-error'); if(!e) return; e.textContent=msg||''; e.style.display = msg?'block':'none'; }
+    function focusSink(){ try{ document.getElementById('focus-sink').focus({preventScroll:true}); }catch(_){ } }
+
+    /* ---------- unified bar ---------- */
+    function startUnifiedBar(totalMs){
+      state.animation.totalMs = Math.max(1000, totalMs|0);
+      state.animation.startedAt = performance.now();
+      state.animation.freezeAt95 = false;
+      function tick(now){
+        const elapsed = now - state.animation.startedAt;
+        let pct = (elapsed / state.animation.totalMs) * 100;
+        if (state.animation.freezeAt95) pct = Math.min(pct, 95);
+        barTo(pct);
+        if (pct < 100) state.animation.timerId = requestAnimationFrame(tick);
+      }
+      cancelAnimationFrame(state.animation.timerId);
+      state.animation.timerId = requestAnimationFrame(tick);
+    }
+    function freezeBarAt95(){ state.animation.freezeAt95 = true; }
+    function finishBarTo100(){ state.animation.freezeAt95 = false; barTo(100); cancelAnimationFrame(state.animation.timerId); }
+
+    /* ---------- lifecycle ---------- */
+    function preloadAndRun(){
+      focusSink();
+      const err=document.getElementById('err'); err.textContent='';
+      setPhaseTitle('Актуализация источников'); // точное название добавим после расчёта времени
+      barTo(0); setPhaseError('');
+      google.script.run.withSuccessHandler(function(res){
+        state.sources=res.sources; state.staleHours=res.staleHours; renderTable();
+        startProcess();
+      }).withFailureHandler(function(e){ err.textContent='Ошибка чтения статусов: '+(e&&e.message?e.message:e); }).FD_getStatus();
+    }
+
+    function startProcess(){
+      if (state.running) return; state.running=true;
+
+      const stale = state.sources.filter(s=>s.isStale);
+      const expectSum = stale.reduce((a,s)=>a+(Number(s.expectSec)||0),0);
+      const totalSec  = stale.length ? (expectSum + 2 + 10) : 10;
+
+      // заголовок фазы с (~сек)
+      if (stale.length){
+        setPhaseTitle('Актуализация источников (~'+expectSum+' сек)');
+      } else {
+        setPhaseTitle('Формирование расчёта (~10 сек)');
+      }
+
+      startUnifiedBar(totalSec * 1000);
+
+      const runSources = (doneCb)=>{
+        if (!stale.length) return doneCb();
+        let i=0;
+        const next = ()=>{
+          if (i>=stale.length) return doneCb();
+          const s=stale[i++]; setRowUpdating(s.key);
+          google.script.run.withSuccessHandler(function(res){
+            setRowReady(s.key, res.stampHuman||'');
+            next();
+          }).withFailureHandler(function(e){
+            setPhaseError((e&&e.message)?e.message:String(e||'Ошибка обновления источника'));
+            freezeBarAt95(); state.running=false;
+          }).FD_runSourceUpdate(s.key);
+        };
+        next();
+      };
+
+      runSources(function(){
+        const waitMs = stale.length ? 2000 : 0;
+        setTimeout(runForecast, waitMs);
+      });
+    }
+
+    function runForecast(){
+      // заголовок фазы на второй этап
+      setPhaseTitle('Формирование расчёта (~10 сек)');
+      google.script.run.withSuccessHandler(function(){
+        finishBarTo100();
+        setTimeout(function(){ try{ google.script.host.close(); }catch(_){ } }, 2000);
+        state.running=false;
+      }).withFailureHandler(function(e){
+        freezeBarAt95();
+        setPhaseError((e&&e.message)?e.message:String(e||'Ошибка при формировании'));
+        state.running=false;
+      }).FD_runBuildForecast();
+    }
+
+    document.addEventListener('DOMContentLoaded', preloadAndRun);
+  </script>
+</body>
+</html>

@@ -163,21 +163,58 @@ function runLayoutImmediate(selectedCab) {
   }
 }
 
-/** onEdit: реагируем только на изменение в контроле на листе Калькулятор */
+/** onEdit: реагируем на muff_mp (площадка) и на muff_cabs (кабинет) */
 function onEdit(e) {
   const T0 = Date.now();
   try {
     if (!e || !e.range) return;
-    const sh = e.range.getSheet();
-    if (!sh || sh.getName() !== SHEET_CALC) return;
+
+    const ss  = SpreadsheetApp.getActive();
+    const rng = e.range;
+    const sh  = rng.getSheet();
+    if (!sh) return;
+
+    // ===== 1) Реакция на смену ПЛОЩАДКИ (именованный диапазон muff_mp) =====
+    // (важно: без привязки к листу — muff_mp может жить в «⚙️ Параметры»)
+    const rngPlat = safeGetRangeByName_('muff_mp');
+    const hitPlat = rngPlat && rangeIntersects_(rng, rngPlat);
+
+    if (hitPlat) {
+      // нормализуем 'OZON/WILDBERRIES' → 'OZ'|'WB'
+      const raw = String(rngPlat.getDisplayValue() || '').trim();
+      const tag = REF.platformCanon(raw) || 'OZ';
+
+      // (опционально) синхронизировать канонич. хранилище, если у тебя есть REF.setCurrentPlatform
+      try { if (REF.setCurrentPlatform) REF.setCurrentPlatform(tag); } catch (_) {}
+
+ // пересобрать выпадашку кабинетов под новую платформу и СБРОСИТЬ её в пусто
+applyCabinetDropdownForCurrentPlatform_NoAutoSelect_();
+
+// 🔵 МГНОВЕННО ПЕРЕКРАСИТЬ КНОПКИ ПОД ТЕКУЩУЮ ПЛОЩАДКУ (без расчётов)
+try {
+  if (typeof KBR_ARROWS !== 'undefined' && KBR_ARROWS && typeof KBR_ARROWS.restyleNow === 'function') {
+    KBR_ARROWS.restyleNow();
+  }
+} catch (_){}
+
+// UX для пользователя
+try { ss.toast('Площадка: ' + tag + '. Выберите кабинет.', 'Готово', 3); } catch (_){}
+
+// по ТЗ при смене площадки — НИЧЕГО не считаем
+return;
+
+    }
+
+    // ===== 2) Реакция на выбор КАБИНЕТА (именованный диапазон muff_cabs) =====
+    // как и раньше: только если выбор сделан на листе «Калькулятор»
+    if (sh.getName() !== SHEET_CALC) return;
 
     const ctrl = getCabCtrlRange_();
-    if (!rangeIntersects_(e.range, ctrl)) return;
+    if (!ctrl || !rangeIntersects_(rng, ctrl)) return;
 
     const selectedCab = String(ctrl.getDisplayValue() || '').trim();
-    if (!selectedCab) return;
+    if (!selectedCab) return; // пусто → ничего не делаем
 
-    // Если лог только что включили — очистим A2:D и начнём новый прогон.
     const logEnabled = maybeResetTechLogOnEnable_();
     if (logEnabled) techLog_('invoke', T0, 'runLayoutImmediate');
 
@@ -189,6 +226,7 @@ function onEdit(e) {
     throw err;
   }
 }
+
 
 /********************* КОНТРОЛ КАБИНЕТА **************************/
 
@@ -244,6 +282,40 @@ function restoreCabinetDropdown_(ctrlRange, selectedCab) {
 
   ctrlRange.setValue(chosen);
 }
+
+
+/** Повесить список кабинетов по текущей платформе, но оставить пусто (не выбирать первый автоматически) */
+function applyCabinetDropdownForCurrentPlatform_NoAutoSelect_() {
+  const ctrl = getCabCtrlRange_();
+  if (!ctrl) return;
+
+  const list = getCabinetListFromParams_(); // фильтрует по REF.getCurrentPlatform()
+  ctrl.clearDataValidations();
+
+  if (list.length) {
+    const rule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(list, true)
+      .setAllowInvalid(false)
+      .build();
+    ctrl.setDataValidation(rule);
+  }
+
+  // ключевое: очистить значение → по умолчанию пусто, пока пользователь сам не выберет
+  ctrl.setValue('');
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /** Список кабинетов из «⚙️ Параметры», с учётом текущей платформы */
 function getCabinetListFromParams_() {
@@ -365,7 +437,7 @@ function collectRowsForCalculator_(cabinet, ctx) {
   });
 
   const ssAJ = (ctx && ctx.ssAJ) ? ctx.ssAJ : (REF.readSS_AJ_Map ? REF.readSS_AJ_Map() : new Map());
-  const physMap = readPhysMapForCabinet_((plat === 'WB') ? PHYS_WB : PHYS_OZ);
+  const physMap = readPhysMapForCabinet_(physSheetName); // теперь используем A:B:C:D (C=Остаток, D=Скорость)
 
   // ----- данные для КАЛЬКУЛЯТОРА -----
   const displayG = [];
@@ -409,22 +481,20 @@ function collectRowsForCalculator_(cabinet, ctx) {
     const key = REF.makeSSKey(selectedCab, art);
     const ph = physMap.get(key);
     if (ph) {
-      const eNum = Number(ph.remainENum) || 0;
-      const gNum = Number(ph.speedNumG)  || 0;
+      const eNum = Number(ph.remainENum) || 0; // C — Остаток
+      const gNum = Number(ph.speedNumG)  || 0; // D — Скорость (как число)
 
+      // N — если остаток 0 → пусто; если скорость 0 → "нп"; иначе E/G
       let nVal = '';
       if (eNum === 0) nVal = '';
       else if (gNum === 0) nVal = 'нп';
       else nVal = (eNum / gNum) || '';
 
-      const fNum = Number(ph.inSuppFNum) || 0;
-      let oStr = '';
-      if      (eNum === 0 && fNum === 0) oStr = '';
-      else if (eNum === 0 && fNum > 0)   oStr = '0 (' + fNum + ')';
-      else if (eNum > 0  && fNum === 0)  oStr = String(eNum);
-      else                                oStr = String(eNum) + ' (' + fNum + ')';
+      // O — только Остаток (без " (В поставке)"), т.к. "В поставке" не берём
+      const oStr = (eNum === 0) ? '' : String(eNum);
 
-      const pDisp = (gNum === 0) ? '' : (ph.speedDispG || '');
+      // P — скорость из D (display-значение, как на листе источника)
+      const pDisp = ph.speedDispG || '';
 
       flowN.push(nVal);
       flowO.push(oStr);
@@ -459,6 +529,7 @@ function collectRowsForCalculator_(cabinet, ctx) {
 
   return { displayG, ratingD, countC, ssAA, flowM, flowN, flowO, flowP };
 }
+
 
 
 function emptyCalcRows_() {
@@ -631,10 +702,11 @@ function readPhysMapForCabinet_(physSheetName) {
 
   const lastRow = sh.getLastRow();
   const lastCol = sh.getLastColumn();
-  if (lastRow < 2 || lastCol < 5) return map;
+  if (lastRow < 2 || lastCol < 4) return map; // нужно минимум A:D
 
-  const vals = sh.getRange(2, 1, lastRow - 1, 5).getValues();        // A:E raw
-  const disp = sh.getRange(2, 1, lastRow - 1, 5).getDisplayValues(); // A:E display
+  // Берём и raw, и display — чтоб корректно достать число и отображаемую строку
+  const vals = sh.getRange(2, 1, lastRow - 1, 4).getValues();        // A:D raw
+  const disp = sh.getRange(2, 1, lastRow - 1, 4).getDisplayValues(); // A:D display
 
   const toNum = (REF && REF.toNumber) ? REF.toNumber : function (v) {
     const n = Number(String(v).replace(',', '.')); return isFinite(n) ? n : 0;
@@ -643,22 +715,28 @@ function readPhysMapForCabinet_(physSheetName) {
   for (var i = 0; i < vals.length; i++) {
     const rowV = vals[i], rowD = disp[i];
 
-    const cab = String(rowV[0] || '').trim(); // A
-    const art = String(rowV[1] || '').trim(); // B
+    const cab = String(rowV[0] || '').trim(); // A — Кабинет
+    const art = String(rowV[1] || '').trim(); // B — Артикул
     if (!cab || !art) continue;
 
     const key = REF.makeSSKey(cab, art);
 
-    const remainENum = toNum(rowD[2]);          // C
-    const inSuppFNum = toNum(rowD[3]);          // D
-    const speedDispG = String(rowD[4] || '');   // E (display)
-    const speedNumG  = toNum(rowD[4]);          // E (numeric)
+    // C — Остаток
+    const remainENum = toNum(rowD[2]);        // числом (из display, с запятыми и т.п.)
+
+    // D — Скорость
+    const speedDispG = String(rowD[3] || ''); // как отображается на листе
+    const speedNumG  = toNum(rowD[3]);        // числом
+
+    // В поставке больше не используем — ставим 0
+    const inSuppFNum = 0;
 
     map.set(key, { remainENum, inSuppFNum, speedDispG, speedNumG });
   }
 
   return map;
 }
+
 
 /********************* «ПАРАЛЛЕЛЬ» — ИНЛАЙН (минимум) *********************/
 function layoutParallelInline_(cabinetFull, ctx) {
@@ -894,6 +972,17 @@ function rangeIntersects_(r, targetRange) {
   var k1 = targetRange.getColumn(), k2 = k1 + targetRange.getNumColumns() - 1;
   return !(r2 < t1 || r1 > t2 || c2 < k1 || c1 > k2);
 }
+
+
+
+/** безопасный геттер именованных диапазонов (не падает, если имени нет) */
+function safeGetRangeByName_(name) {
+  try { return SpreadsheetApp.getActive().getRangeByName(name); } catch (_) { return null; }
+}
+
+
+
+
 function autoWidthPlus_(sh, colIndex, paddingPx) {
   sh.autoResizeColumn(colIndex);
   var w = sh.getColumnWidth(colIndex);
