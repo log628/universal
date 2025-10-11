@@ -333,9 +333,12 @@ function getREFRESHprices_OZ() {
   if (last < 2) { ss.toast('Нет строк для обновления', 'OZON цены', 5); return; }
 
   var platTag = REF.getCurrentPlatform(); // 'OZ'|'WB'|null
-  var shCalc  = ss.getSheetByName(REF.SHEETS.CALC);
-  var ctrl    = shCalc ? shCalc.getRange(REF.CTRL_RANGE_A1) : null;
-  var currentCab = ctrl ? String(ctrl.getDisplayValue() || '').trim() : '';
+var shCalc = ss.getSheetByName(REF.SHEETS.CALC);
+var ctrlRange =
+  (REF && typeof REF.getCabinetControlRange === 'function' && REF.getCabinetControlRange()) ||
+  (shCalc ? shCalc.getRange(REF.CTRL_RANGE_A1) : null);
+var currentCab = ctrlRange ? String(ctrlRange.getDisplayValue() || '').trim() : '';
+
   var normCab = REF.normCabinet;
 
   // Читаем A..K (A=Кабинет, B=Артикул, K=SKU опц)

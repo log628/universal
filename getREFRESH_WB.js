@@ -111,20 +111,29 @@ function getREFRESH_WB() {
       pricesDict = list.reduce(function (acc, it) { acc[it.nmID] = it; return acc; }, {});
     } catch (e) { pricesDict = {}; log('WARN getPrices', cabName + ': ' + ((e && e.message) || e)); }
 
-    // 3) Комиссии
-    var commissionsDict = {};
-    try {
-      var report = withToken_(cabName, 'any', function (api) { return api.getCategoryCommissions(); }, 'getCategoryCommissions') || [];
-      for (var r = 0; r < report.length; r++) {
-        var rec = report[r];
-        var sid = (rec.subjectID != null ? rec.subjectID : rec.subjectId);
-        if (!sid) continue;
-        var FBO  = rec.kgvpMarketplace != null ? Number(rec.kgvpMarketplace) : '';
-        var FBS  = rec.kgvpSupplier    != null ? Number(rec.kgvpSupplier)    : '';
-        var RFBS = rec.kgvpBooking     != null ? Number(rec.kgvpBooking)     : '';
-        commissionsDict[String(sid)] = { FBO: FBO, FBS: FBS, RFBS: RFBS };
-      }
-    } catch (e) { commissionsDict = {}; log('WARN commissions', cabName + ': ' + ((e && e.message) || e)); }
+// 3) Комиссии
+var commissionsDict = {};
+try {
+var report = withToken_(cabName, 'stats', function (api) { 
+  return api.getCategoryCommissions(); 
+}, 'getCategoryCommissions') || [];
+  for (var r = 0; r < report.length; r++) {
+    var rec = report[r];
+    var sid = (rec.subjectID != null ? rec.subjectID : rec.subjectId);
+    if (!sid) continue;
+
+    // >>> НОВОЕ СООТНЕСЕНИЕ ПОЛЕЙ:
+    // FBO  = paidStorageKgvp
+    // FBS  = kgvpMarketplace
+    // RFBS = kgvpBooking   (без изменений)
+    var FBO  = rec.paidStorageKgvp != null ? Number(rec.paidStorageKgvp) : '';
+    var FBS  = rec.kgvpMarketplace != null ? Number(rec.kgvpMarketplace) : '';
+    var RFBS = rec.kgvpBooking     != null ? Number(rec.kgvpBooking)     : '';
+
+    commissionsDict[String(sid)] = { FBO: FBO, FBS: FBS, RFBS: RFBS };
+  }
+} catch (e) { commissionsDict = {}; log('WARN commissions', cabName + ': ' + ((e && e.message) || e)); }
+
 
     // 4) Черновики + сбор nmID
     var drafts = [], nmAll = [];
@@ -365,9 +374,12 @@ function getREFRESHprices_WB() {
   if (last < 2) { ss.toast('Нет строк для обновления', 'WB цены', 5); return; }
 
   var platTag = REF.getCurrentPlatform(); // 'OZ'|'WB'|null
-  var shCalc  = ss.getSheetByName(REF.SHEETS.CALC);
-  var ctrl    = shCalc ? shCalc.getRange(REF.CTRL_RANGE_A1) : null;
-  var currentCab = ctrl ? String(ctrl.getDisplayValue() || '').trim() : '';
+var shCalc = ss.getSheetByName(REF.SHEETS.CALC);
+var ctrlRange =
+  (REF && typeof REF.getCabinetControlRange === 'function' && REF.getCabinetControlRange()) ||
+  (shCalc ? shCalc.getRange(REF.CTRL_RANGE_A1) : null);
+var currentCab = ctrlRange ? String(ctrlRange.getDisplayValue() || '').trim() : '';
+
   var normCab = REF.normCabinet;
 
   // Читаем A (Кабинет), B (Артикул), K (nmID)
@@ -390,27 +402,46 @@ function getREFRESHprices_WB() {
 
   // Токены WB
   var roleMap = REF.buildWBTokenMapFromParams();
-  function withToken_(cabName, role, callFn, tag) {
-    var rec = roleMap.get(cabName) || { prices: [], content: [], stats: [], supplies: [], any: [] };
-    var pools = [];
-    if (role && rec[role] && rec[role].length) pools = rec[role].slice();
-    else if (rec.any && rec.any.length) pools = rec.any.slice();
+function withToken_(cabName, preferredRole, callFn, tag) {
+  var rec = roleMap.get(cabName) || { prices: [], content: [], stats: [], supplies: [], any: [] };
 
-    var errs = [];
-    for (var i = 0; i < pools.length; i++) {
-      var tk = pools[i];
-      try {
-        var api = new WB(tk);
-        var res = callFn(api, tk);
-        log('API ' + tag + ' OK', 'cab=' + cabName + ', token#=' + (i + 1));
-        return res;
-      } catch (e) {
-        errs.push((e && e.message) ? e.message : String(e));
-        log('API ' + tag + ' FAIL', 'cab=' + cabName + ', token#=' + (i + 1) + ', err=' + errs[errs.length - 1]);
-      }
+  // приоритетный порядок подбора токена
+  var order = [];
+  if (preferredRole) order.push(preferredRole);
+  order = order.concat(['stats','prices','content','supplies','any']);
+
+  // собираем кандидатов без дублей
+  var pools = [], seen = new Set();
+  for (var i = 0; i < order.length; i++) {
+    var role = order[i];
+    var arr = rec[role] || [];
+    for (var j = 0; j < arr.length; j++) {
+      var tk = arr[j];
+      if (!tk || seen.has(tk)) continue;
+      seen.add(tk);
+      pools.push(tk);
     }
-    throw new Error('Кабинет «' + cabName + '»: ни один токен не сработал для ' + tag + '. Errs: ' + errs.join(' | '));
   }
+  if (!pools.length) throw new Error('Нет токенов ни в одной роли для «' + cabName + '»');
+
+  var errs = [];
+  for (var k = 0; k < pools.length; k++) {
+    var tk = pools[k];
+    try {
+      var t0 = Date.now();
+      var api = new WB(tk);
+      var res = callFn(api, tk);
+      log('API ' + tag + ' OK', 'cab=' + cabName + ', token#=' + (k + 1) + ', ' + (Date.now() - t0) + 'ms');
+      return res;
+    } catch (e) {
+      var msg = (e && e.message) ? e.message : String(e);
+      errs.push(msg);
+      log('API ' + tag + ' FAIL', 'cab=' + cabName + ', token#=' + (k + 1) + ', err=' + msg);
+    }
+  }
+  throw new Error('Кабинет «' + cabName + '»: ни один токен не сработал для ' + tag + '. Errs: ' + errs.join(' | '));
+}
+
 
   var totalTouched = 0, totalUpdated = 0, totalParUpdated = 0;
   var successCabs = [];

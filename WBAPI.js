@@ -281,15 +281,21 @@ class WB {
     );
   }
 
-  /** Утилита: выжать комиссии (пытаемся распознать разные ключи API) */
-  static pickCommissions(rec) {
-    const fbo  = rec.kgvpMarketplace ?? rec.fbo ?? rec.fboKgvp ?? rec.fboPercent ?? '';
-    const fbs  = rec.kgvpSupplier   ?? rec.fbs ?? rec.fbsKgvp ?? rec.fbsPercent ?? '';
-    const rfbs = rec.kgvpBooking    ?? rec.rfbs ?? rec.booking ?? rec.rfbsPercent ?? '';
-    return {
-      FBO:  fbo  === '' ? '' : Number(fbo),
-      FBS:  fbs  === '' ? '' : Number(fbs),
-      RFBS: rfbs === '' ? '' : Number(rfbs),
-    };
-  }
+
+/** Утилита: выжать комиссии (пытаемся распознать разные ключи API) */
+static pickCommissions(rec) {
+  // Требование:
+  //  - FBO  = paidStorageKgvp
+  //  - FBS  = kgvpMarketplace
+  //  - RFBS = kgvpBooking
+  const fbo  = rec.paidStorageKgvp  ?? rec.fbo ?? rec.fboKgvp ?? rec.fboPercent ?? '';
+  const fbs  = rec.kgvpMarketplace  ?? rec.fbs ?? rec.fbsKgvp ?? rec.fbsPercent ?? '';
+  const rfbs = rec.kgvpBooking      ?? rec.rfbs ?? rec.booking ?? rec.rfbsPercent ?? '';
+  return {
+    FBO:  fbo  === '' ? '' : Number(fbo),
+    FBS:  fbs  === '' ? '' : Number(fbs),
+    RFBS: rfbs === '' ? '' : Number(rfbs),
+  };
+}
+
 }

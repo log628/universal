@@ -5,9 +5,9 @@
  *
  * Источники выбираются строго через REF.getCurrentPlatform():
  *   - [OZ]/[WB] Артикулы  (A:M, 13 колонок; M = «Своя категория»)
- *   - [OZ]/[WB] Физ. оборот (A:E)
+ *   - [OZ]/[WB] Физ. оборот (A:D)
  *
- * Контрол кабинета — ИМЕНОВАННЫЙ ДИАПАЗОН REF.CTRL_RANGE_A1 (= 'muff_cabs')
+ * Контрол кабинета — ИМЕНОВАННЫЙ ДИАПАЗОН REF.NAMED.CAB_CTRL (= 'muff_cabs')
  * «⛓️ Параллель» рендерится инлайном вместе с калькулятором (A:E + M)
  ***************************************************************/
 
@@ -22,7 +22,8 @@ const PHYS_OZ  = REF.SHEETS.FIZ_OZ;
 const PHYS_WB  = REF.SHEETS.FIZ_WB;
 
 // единый контрол выбора кабинета (именованный диапазон)
-const CTRL_RANGE_A1 = REF.CTRL_RANGE_A1;
+const CTRL_RANGE_A1 = REF.NAMED.CAB_CTRL;
+const CAB_PLACEHOLDER = '<выберите кабинет>';
 
 const ROW_DATA       = 4;
 const MIN_DATA_ROWS  = 22;
@@ -113,6 +114,10 @@ function paramsLogShort_(label, cabinets, plat) {
   try { REF.logRun && REF.logRun(label, cabinets, plat); } catch(_){}
 }
 
+function platformUiLabel_(tag) {
+  return tag === 'OZ' ? 'OZON' : tag === 'WB' ? 'WILDBERRIES' : '';
+}
+
 /********************* ПУБЛИЧНЫЕ ХЕНДЛЕРЫ ************************/
 
 function runLayoutImmediate(selectedCab) {
@@ -124,9 +129,9 @@ function runLayoutImmediate(selectedCab) {
   if (!sh) throw new Error(`Лист "${SHEET_CALC}" не найден`);
 
   const ctrl = getCabCtrlRange_();
-  const currentCab = String(selectedCab || ctrl.getDisplayValue() || '').trim();
-  if (!currentCab) {
-    ss.toast('Не выбран кабинет (muff_cabs)', 'Внимание', 3);
+  const currentCab = String(selectedCab || (ctrl ? ctrl.getDisplayValue() : '') || '').trim();
+  if (!currentCab || currentCab === CAB_PLACEHOLDER) {
+    ss.toast('Не выбран кабинет', 'Внимание', 3);
     techLog_('END', T0, 'abort: no cabinet');
     return;
   }
@@ -175,45 +180,39 @@ function onEdit(e) {
     if (!sh) return;
 
     // ===== 1) Реакция на смену ПЛОЩАДКИ (именованный диапазон muff_mp) =====
-    // (важно: без привязки к листу — muff_mp может жить в «⚙️ Параметры»)
-    const rngPlat = safeGetRangeByName_('muff_mp');
-    const hitPlat = rngPlat && rangeIntersects_(rng, rngPlat);
+    const rngPlat = safeGetRangeByName_(REF.NAMED.MP_CTRL);
+    const hitPlat = rngPlat
+      && rngPlat.getSheet().getSheetId() === sh.getSheetId()
+      && rangeIntersects_(rng, rngPlat);
 
     if (hitPlat) {
-      // нормализуем 'OZON/WILDBERRIES' → 'OZ'|'WB'
       const raw = String(rngPlat.getDisplayValue() || '').trim();
       const tag = REF.platformCanon(raw) || 'OZ';
 
-      // (опционально) синхронизировать канонич. хранилище, если у тебя есть REF.setCurrentPlatform
-      try { if (REF.setCurrentPlatform) REF.setCurrentPlatform(tag); } catch (_) {}
+      // 1) Пересобрать список кабинетов под платформу и выставить плейсхолдер
+      applyCabinetDropdownForCurrentPlatform_NoAutoSelect_();
 
- // пересобрать выпадашку кабинетов под новую платформу и СБРОСИТЬ её в пусто
-applyCabinetDropdownForCurrentPlatform_NoAutoSelect_();
+      // 2) Рамка у кнопки-диапазона calc_button_refresh — под платформу OZ/WB
+      try { applyCalcRefreshBorderForPlatform_(); } catch (_){}
 
-// 🔵 МГНОВЕННО ПЕРЕКРАСИТЬ КНОПКИ ПОД ТЕКУЩУЮ ПЛОЩАДКУ (без расчётов)
-try {
-  if (typeof KBR_ARROWS !== 'undefined' && KBR_ARROWS && typeof KBR_ARROWS.restyleNow === 'function') {
-    KBR_ARROWS.restyleNow();
-  }
-} catch (_){}
+      // 3) «Погасить» данные на Калькуляторе: шрифт = фон (эффект «пусто»)
+      try { dimCalcDataFontsToBackground_(); } catch (_){}
 
-// UX для пользователя
-try { ss.toast('Площадка: ' + tag + '. Выберите кабинет.', 'Готово', 3); } catch (_){}
+      // 4) Уведомление пользователю (полное имя платформы)
+      try { ss.toast('Площадка: ' + platformUiLabel_(tag) + '. Выберите кабинет.', 'Готово', 3); } catch (_){}
 
-// по ТЗ при смене площадки — НИЧЕГО не считаем
-return;
-
+      // по ТЗ при смене площадки — НИЧЕГО не считаем
+      return;
     }
 
     // ===== 2) Реакция на выбор КАБИНЕТА (именованный диапазон muff_cabs) =====
-    // как и раньше: только если выбор сделан на листе «Калькулятор»
     if (sh.getName() !== SHEET_CALC) return;
 
     const ctrl = getCabCtrlRange_();
     if (!ctrl || !rangeIntersects_(rng, ctrl)) return;
 
     const selectedCab = String(ctrl.getDisplayValue() || '').trim();
-    if (!selectedCab) return; // пусто → ничего не делаем
+    if (!selectedCab || selectedCab === CAB_PLACEHOLDER) return; // плейсхолдер/пусто → ничего не делаем
 
     const logEnabled = maybeResetTechLogOnEnable_();
     if (logEnabled) techLog_('invoke', T0, 'runLayoutImmediate');
@@ -228,6 +227,50 @@ return;
 }
 
 
+/** Рамка вокруг именованного диапазона calc_button_refresh — под платформу OZ/WB (merge-aware, без Advanced API) */
+function applyCalcRefreshBorderForPlatform_() {
+  var plat = REF.getCurrentPlatform();
+  var colorHex = (plat === 'WB') ? '#8c44bb' : (plat === 'OZ') ? '#016bbf' : null;
+  if (!colorHex) return;
+
+  var base = safeGetRangeByName_('calc_button_refresh');
+  if (!base) return;
+
+  // если именованный диапазон — часть мерджа, расширяем до всего мерджа
+  var rng = base.isPartOfMerge() ? base.getMergedRanges()[0] : base;
+
+  // Толстая внешняя рамка нужного цвета
+  rng.setBorder(true, true, true, true, false, false, colorHex, SpreadsheetApp.BorderStyle.SOLID_THICK);
+  SpreadsheetApp.flush();
+}
+
+
+function hexToRgbObj_(hex) {
+  var h = String(hex || '').replace('#', '');
+  if (h.length === 3) h = h.split('').map(function (x) { return x + x; }).join('');
+  var r = parseInt(h.substr(0, 2), 16) / 255;
+  var g = parseInt(h.substr(2, 2), 16) / 255;
+  var b = parseInt(h.substr(4, 2), 16) / 255;
+  return { red: r, green: g, blue: b };
+}
+
+/** «Погасить» данные на Калькуляторе: цвет шрифта = цвет фона для G:AC, строки данных */
+function dimCalcDataFontsToBackground_() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SHEET_CALC);
+  if (!sh) return;
+
+  var top = ROW_DATA;
+  var last = Math.max(sh.getLastRow(), MIN_LAST_ROW);
+  var rows = last - top + 1;
+  if (rows <= 0) return;
+
+  var c1 = col_('G'), c2 = col_('AC');
+  var rng = sh.getRange(top, c1, rows, c2 - c1 + 1);
+  var bgs = rng.getBackgrounds();      // 2D массив HEX фонов
+  rng.setFontColors(bgs);              // ставим шрифт = фону (делаем «невидимым»)
+}
+
 /********************* КОНТРОЛ КАБИНЕТА **************************/
 
 function setupCabinetControl_() {
@@ -236,15 +279,17 @@ function setupCabinetControl_() {
   if (!shCalc) throw new Error(`Лист "${SHEET_CALC}" не найден`);
 
   const ctrl = getCabCtrlRange_();
-  const currentValue = String(ctrl.getDisplayValue() || '').trim();
+  const currentValue = String(ctrl ? (ctrl.getDisplayValue() || '') : '').trim();
 
-  ctrl.breakApart();
-  ctrl.clearDataValidations();
-  ctrl.merge();
-  ctrl.setHorizontalAlignment('center')
-      .setVerticalAlignment('middle')
-      .setFontFamily(FONT.family)
-      .setFontSize(11);
+  if (ctrl) {
+    ctrl.breakApart();
+    ctrl.clearDataValidations();
+    ctrl.merge();
+    ctrl.setHorizontalAlignment('center')
+        .setVerticalAlignment('middle')
+        .setFontFamily(FONT.family)
+        .setFontSize(11);
+  }
 
   restoreCabinetDropdown_(ctrl, currentValue || null);
 }
@@ -255,25 +300,25 @@ function getCabCtrlRange_() {
     const r = REF.getCabinetControlRange && REF.getCabinetControlRange();
     if (r) return r;
   } catch(_) {}
-  const byName = ss.getRangeByName(CTRL_RANGE_A1);
-  if (!byName) throw new Error('Именованный диапазон muff_cabs не найден');
-  return byName;
+  try { return ss.getRangeByName(CTRL_RANGE_A1); } catch(_) {}
+  throw new Error('Именованный диапазон muff_cabs не найден');
 }
 
-function removeCabinetDropdown_(ctrlRange) { ctrlRange.clearDataValidations(); }
+function removeCabinetDropdown_(ctrlRange) { if (ctrlRange) ctrlRange.clearDataValidations(); }
 
 function restoreCabinetDropdown_(ctrlRange, selectedCab) {
   const list = getCabinetListFromParams_(); // фильтруем по текущей платформе
-  ctrlRange.clearDataValidations();
+  if (ctrlRange) ctrlRange.clearDataValidations();
 
-  if (!list.length) { if (selectedCab) ctrlRange.setValue(selectedCab); return; }
+  if (!list.length) { if (ctrlRange && selectedCab) ctrlRange.setValue(selectedCab); return; }
 
   const rule = SpreadsheetApp.newDataValidation()
     .requireValueInList(list, true)
     .setAllowInvalid(false)
     .build();
-  ctrlRange.setDataValidation(rule);
+  if (ctrlRange) ctrlRange.setDataValidation(rule);
 
+  if (!ctrlRange) return;
   const cur = String(ctrlRange.getDisplayValue() || '').trim();
   const chosen =
     (selectedCab && list.indexOf(selectedCab) !== -1) ? selectedCab :
@@ -283,8 +328,7 @@ function restoreCabinetDropdown_(ctrlRange, selectedCab) {
   ctrlRange.setValue(chosen);
 }
 
-
-/** Повесить список кабинетов по текущей платформе, но оставить пусто (не выбирать первый автоматически) */
+/** Повесить список кабинетов по текущей платформе, но оставить плейсхолдер (не выбирать первый автоматически) */
 function applyCabinetDropdownForCurrentPlatform_NoAutoSelect_() {
   const ctrl = getCabCtrlRange_();
   if (!ctrl) return;
@@ -300,22 +344,9 @@ function applyCabinetDropdownForCurrentPlatform_NoAutoSelect_() {
     ctrl.setDataValidation(rule);
   }
 
-  // ключевое: очистить значение → по умолчанию пусто, пока пользователь сам не выберет
-  ctrl.setValue('');
+  // ключевое: выставить плейсхолдер → не запускать расчёты
+  ctrl.setValue(CAB_PLACEHOLDER);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 /** Список кабинетов из «⚙️ Параметры», с учётом текущей платформы */
 function getCabinetListFromParams_() {
@@ -369,7 +400,7 @@ function layoutCalculator(cabinet, ctx) {
   writeReviews_(sh, src.ratingD, src.countC, rowsLen);
   writeSS_(sh, src.ssAA, rowsLen);
 
-  // Блок M:P — M = только «Наличие»
+  // Блок M:P — M = только «Наличие»; N = E/G|нп; O = только остаток; P = скорость
   writeFlowBlock_(sh, src.flowM, src.flowN, src.flowO, src.flowP, rowsLen);
 
   applyNumberFormatsRUAB_(sh, rowsLen);
@@ -379,6 +410,10 @@ function layoutCalculator(cabinet, ctx) {
   applyDataGrid_(sh);
 
   sh.getRange(ROW_DATA, col_('U'), rowsLen, 1).setFontWeight('bold');
+
+  // Выделяем проблемные значения
+  emphasizeNPandNoCC_(sh, rowsLen);
+
   techLog_('CALC', T0, 'layoutCalculator painted', {rowsLen});
 }
 
@@ -393,7 +428,7 @@ function resolvePlatformCurrent_() {
 function collectRowsForCalculator_(cabinet, ctx) {
   const ss  = SpreadsheetApp.getActive();
   const selectedCab = String(cabinet||'').trim();
-  if (!selectedCab) return emptyCalcRows_();
+  if (!selectedCab || selectedCab === CAB_PLACEHOLDER) return emptyCalcRows_();
 
   const plat = (ctx && ctx.plat) || resolvePlatformCurrent_(); // 'OZ' | 'WB'
   const artsSheetName = (plat === 'WB') ? ARTS_WB : ARTS_OZ;
@@ -412,10 +447,10 @@ function collectRowsForCalculator_(cabinet, ctx) {
   const colArt    = findHeaderIndexFlexible_(headers, ['Артикул'])        || 2;   // B
   const colRevsC  = findHeaderIndexFlexible_(headers, ['Отзывы'])         || 3;   // C
   const colRateD  = findHeaderIndexFlexible_(headers, ['Рейтинг'])        || 4;   // D
-  const colFBO    = findHeaderIndexFlexible_(headers, ['FBO'])            || 6;   // F   // [PAR]
-  const colFBS    = findHeaderIndexFlexible_(headers, ['FBS'])            || 7;   // G   // [PAR]
-  const colVolI   = findHeaderIndexFlexible_(headers, ['Объем','Объём'])  || 9;   // I   // [PAR]
-  const colPriceJ = findHeaderIndexFlexible_(headers, ['Цена'])           || 10;  // J   // [PAR]
+  const colFBO    = findHeaderIndexFlexible_(headers, ['FBO'])            || 6;   // F
+  const colFBS    = findHeaderIndexFlexible_(headers, ['FBS'])            || 7;   // G
+  const colVolI   = findHeaderIndexFlexible_(headers, ['Объем','Объём'])  || 9;   // I
+  const colPriceJ = findHeaderIndexFlexible_(headers, ['Цена'])           || 10;  // J
   const colOwnCat = findHeaderIndexFlexible_(headers, ['Своя категория']) || 13;  // M
 
   const vals = shS.getRange(2,1,lastRow-1,13).getValues(); // RAW
@@ -437,7 +472,7 @@ function collectRowsForCalculator_(cabinet, ctx) {
   });
 
   const ssAJ = (ctx && ctx.ssAJ) ? ctx.ssAJ : (REF.readSS_AJ_Map ? REF.readSS_AJ_Map() : new Map());
-  const physMap = readPhysMapForCabinet_(physSheetName); // теперь используем A:B:C:D (C=Остаток, D=Скорость)
+  const physMap = readPhysMapForCabinet_(physSheetName); // A:B:C:D (C=Остаток, D=Скорость)
 
   // ----- данные для КАЛЬКУЛЯТОРА -----
   const displayG = [];
@@ -490,7 +525,7 @@ function collectRowsForCalculator_(cabinet, ctx) {
       else if (gNum === 0) nVal = 'нп';
       else nVal = (eNum / gNum) || '';
 
-      // O — только Остаток (без " (В поставке)"), т.к. "В поставке" не берём
+      // O — только Остаток (без «В поставке»)
       const oStr = (eNum === 0) ? '' : String(eNum);
 
       // P — скорость из D (display-значение, как на листе источника)
@@ -505,7 +540,7 @@ function collectRowsForCalculator_(cabinet, ctx) {
       flowP.push('');
     }
 
-    // ---- ПАРАЛЛЕЛЬ: из того же filtered (никаких повторных чтений/расчётов) ----
+    // ---- ПАРАЛЛЕЛЬ ----
     parA.push([art]);
     parB.push([row[colPriceJ-1]]);
     parC.push([row[colVolI  -1]]);
@@ -513,7 +548,7 @@ function collectRowsForCalculator_(cabinet, ctx) {
     parE.push([row[colFBS   -1]]);
   }
 
-  // кладём пакет для Параллели в ctx (общий кэш для этого прогона)
+  // Пакет для Параллели в ctx (общий кэш для этого прогона)
   if (ctx) {
     ctx.parallelCache = {
       cabinet: selectedCab,
@@ -529,8 +564,6 @@ function collectRowsForCalculator_(cabinet, ctx) {
 
   return { displayG, ratingD, countC, ssAA, flowM, flowN, flowO, flowP };
 }
-
-
 
 function emptyCalcRows_() {
   return { displayG: [], ratingD: [], countC: [], ssAA: [], flowM: [], flowN: [], flowO: [], flowP: [] };
@@ -728,7 +761,7 @@ function readPhysMapForCabinet_(physSheetName) {
     const speedDispG = String(rowD[3] || ''); // как отображается на листе
     const speedNumG  = toNum(rowD[3]);        // числом
 
-    // В поставке больше не используем — ставим 0
+    // «В поставке» не используется и не читается — устанавливаем 0
     const inSuppFNum = 0;
 
     map.set(key, { remainENum, inSuppFNum, speedDispG, speedNumG });
@@ -736,7 +769,6 @@ function readPhysMapForCabinet_(physSheetName) {
 
   return map;
 }
-
 
 /********************* «ПАРАЛЛЕЛЬ» — ИНЛАЙН (минимум) *********************/
 function layoutParallelInline_(cabinetFull, ctx) {
@@ -748,7 +780,7 @@ function layoutParallelInline_(cabinetFull, ctx) {
   if (!sh) sh = ss.insertSheet(SHEET_PAR);
 
   const cabinet = String(cabinetFull || '').trim();
-  if (!cabinet) throw new Error('Не выбран кабинет для «⛓️ Параллель»');
+  if (!cabinet || cabinet === CAB_PLACEHOLDER) throw new Error('Не выбран кабинет для «⛓️ Параллель»');
 
   const plat = (ctx && (ctx.plat === 'OZ' || ctx.plat === 'WB')) ? ctx.plat : resolvePlatformCurrent_();
 
@@ -774,7 +806,7 @@ function layoutParallelInline_(cabinetFull, ctx) {
     return;
   }
 
-  // === 2) Fallback: старое поведение (на всякий случай) ===
+  // === 2) Fallback: собрать напрямую из артикулов (на всякий случай) ===
   const artsSheetName = (plat === 'WB') ? ARTS_WB : ARTS_OZ;
   const shS = ss.getSheetByName(artsSheetName);
 
@@ -809,7 +841,6 @@ function layoutParallelInline_(cabinetFull, ctx) {
         return A < B ? -1 : (A > B ? 1 : 0);
       });
 
-      // берём СС из уже собранной ssAJ/resolve, но аккуратно (может быть тяжелее)
       const ssAJ = (ctx && ctx.ssAJ) ? ctx.ssAJ : (REF.readSS_AJ_Map ? REF.readSS_AJ_Map() : new Map());
 
       const n = rows.length;
@@ -844,30 +875,20 @@ function layoutParallelInline_(cabinetFull, ctx) {
     techLog_('PAR', T0, 'build data end (fallback)', { n: 0, reason: 'arts sheet missing' });
   }
 
-  const n = pc.A.length;
-
-// 1) держим фиксированный коридор высоты по максимуму кабинетов на площадке
-ensureParallelRowsByMaxCabinet_(sh, plat);
-
-// 2) столбцов хватит
-ensureColCapacityTo_(sh, Math.max(13, sh.getMaxColumns()));
-
-// 3) пишем данные в первые n строк под шапкой; остаток НЕ трогаем
-if (n > 0) {
-  sh.getRange(2,  1, n, 1).setValues(pc.A); // A2:A
-  sh.getRange(2,  2, n, 1).setValues(pc.B); // B2:B
-  sh.getRange(2,  3, n, 1).setValues(pc.C); // C2:C
-  sh.getRange(2,  4, n, 1).setValues(pc.D); // D2:D
-  sh.getRange(2,  5, n, 1).setValues(pc.E); // E2:E
-  sh.getRange(2, 13, n, 1).setValues(pc.M); // M2:M
-}
-// никаких trim/insert под конкретный кабинет!
-
+  const n = A.length;
+  ensureRowsExactlyStrict_(sh, 1 + n);
+  ensureColCapacityTo_(sh, Math.max(13, sh.getMaxColumns()));
+  if (n > 0) {
+    sh.getRange(2,  1, n, 1).setValues(A);
+    sh.getRange(2,  2, n, 1).setValues(B);
+    sh.getRange(2,  3, n, 1).setValues(C);
+    sh.getRange(2,  4, n, 1).setValues(D);
+    sh.getRange(2,  5, n, 1).setValues(E);
+    sh.getRange(2, 13, n, 1).setValues(M);
+  }
 
   techLog_('PAR_END', T0, 'layoutParallelInline_', { wrote: n, source: 'fallback' });
 }
-
-
 
 /************* Вспомогалки *************/
 
@@ -882,7 +903,6 @@ function ensureColCapacityTo_(sh, minCols) {
   const cur = sh.getMaxColumns();
   if (cur < minCols) sh.insertColumnsAfter(cur, minCols - cur);
 }
-
 
 /************* Хелперы «Параллели» (инлайн) *************/
 
@@ -961,10 +981,6 @@ function trimRowsAfter_(sh, rowsLen) {
   var maxRows = sh.getMaxRows();
   if (keepLast < maxRows) sh.deleteRows(keepLast + 1, maxRows - keepLast);
 }
-function ensureColCapacityTo_(sh, minCols) {
-  var maxCols = sh.getMaxColumns();
-  if (maxCols < minCols) sh.insertColumnsAfter(maxCols, minCols - maxCols);
-}
 function rangeIntersects_(r, targetRange) {
   var r1 = r.getRow(), r2 = r1 + r.getNumRows() - 1;
   var c1 = r.getColumn(), c2 = c1 + r.getNumColumns() - 1;
@@ -973,15 +989,10 @@ function rangeIntersects_(r, targetRange) {
   return !(r2 < t1 || r1 > t2 || c2 < k1 || c1 > k2);
 }
 
-
-
 /** безопасный геттер именованных диапазонов (не падает, если имени нет) */
 function safeGetRangeByName_(name) {
   try { return SpreadsheetApp.getActive().getRangeByName(name); } catch (_) { return null; }
 }
-
-
-
 
 function autoWidthPlus_(sh, colIndex, paddingPx) {
   sh.autoResizeColumn(colIndex);
@@ -1008,7 +1019,7 @@ function writeFlowBlock_(sh, arrM, arrN, arrO, arrP, rowsLen) {
     .setNumberFormat('0')
     .setHorizontalAlignment('center');
 
-  // O — "E (F)"
+  // O — только Остаток (без «В поставке»)
   sh.getRange(ROW_DATA, col_('O'), rowsLen, 1)
     .setValues(padVals(arrO))
     .setNumberFormat('General')
@@ -1021,13 +1032,54 @@ function writeFlowBlock_(sh, arrM, arrN, arrO, arrP, rowsLen) {
     .setHorizontalAlignment('center');
 }
 
+/** Выделить проблемные значения:
+ *  - N: 'нп'  → красный жирный
+ *  - AA: 'нет СС' → красный жирный
+ */
+function emphasizeNPandNoCC_(sh, rowsLen) {
+  if (!sh || rowsLen <= 0) return;
+
+  // ===== N (Запас)
+  var rngN = sh.getRange(ROW_DATA, col_('N'), rowsLen, 1);
+  var dispN = rngN.getDisplayValues();
+  var colorsN = new Array(rowsLen);
+  var weightsN = new Array(rowsLen);
+  for (var i = 0; i < rowsLen; i++) {
+    var s = String(dispN[i][0] || '').trim().toLowerCase();
+    if (s === 'нп') {
+      colorsN[i] = ['#cc0000'];
+      weightsN[i] = ['bold'];
+    } else {
+      colorsN[i] = [COLOR.txt];
+      weightsN[i] = ['normal'];
+    }
+  }
+  rngN.setFontColors(colorsN).setFontWeights(weightsN);
+
+  // ===== AA (СС)
+  var rngAA = sh.getRange(ROW_DATA, col_('AA'), rowsLen, 1);
+  var dispAA = rngAA.getDisplayValues();
+  var colorsAA = new Array(rowsLen);
+  var weightsAA = new Array(rowsLen);
+  for (var j = 0; j < rowsLen; j++) {
+    var t = String(dispAA[j][0] || '').trim().toLowerCase();
+    if (t === 'нет сс') {
+      colorsAA[j] = ['#cc0000'];
+      weightsAA[j] = ['bold'];
+    } else {
+      colorsAA[j] = [COLOR.txt];
+      weightsAA[j] = ['normal'];
+    }
+  }
+  rngAA.setFontColors(colorsAA).setFontWeights(weightsAA);
+}
+
 /************* Размерность для «Параллели» *************/
 function ensureRowsExactly_(sh, needRows) {
   const cur = sh.getMaxRows();
   if (cur < needRows)      sh.insertRowsAfter(cur, needRows - cur);
   else if (cur > needRows) sh.deleteRows(needRows + 1, cur - needRows);
 }
-
 
 /** Имя листа артикулов по платформе */
 function getArtsSheetNameByPlat_(plat) {
@@ -1084,4 +1136,3 @@ function ensureParallelRowsByMaxCabinet_(sh, plat) {
     sh.deleteRows(want + 1, cur - want);
   }
 }
-

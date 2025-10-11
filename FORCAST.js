@@ -1,3 +1,13 @@
+/** ======================================================================
+ * FORCAST.gs — сборка листа «🎏 Форкаст» с учётом централизованного REF
+ *  - Использует только REF.SHEETS для имён листов
+ *  - «🍔 СС» читается по заголовкам (robust): A:J (обязательно),
+ *    L:M — курсы (опционально), O:P:Q — комплекты (опционально)
+ *  - Флаг «Не закупается» берётся из столбца с таким заголовком (A:J)
+ *  - Не использует «В поставке WB» — единственная колонка «В поставке»
+ *  - Резолв «товара» из артикула делегирован в REF.toTovarFromArticle
+ * ====================================================================== */
+
 function buildForecast_All() {
   var ss = SpreadsheetApp.getActive();
   var sh = ss.getSheetByName(REF && REF.SHEETS ? REF.SHEETS.FORECAST : '🎏 Форкаст') || ss.insertSheet('🎏 Форкаст');
@@ -27,6 +37,16 @@ function buildForecast_All() {
     var a = Math.max(0, Number(x)||0);
     var s = Math.max(1, Math.floor(Number(step)||0) || 1);
     return Math.ceil(a / s) * s;
+  }
+  function hdrIndex(hdrArr /* display row */, names /* string|string[] */){
+    var hdr = (hdrArr||[]).map(function(v){return norm(v);});
+    var list = Array.isArray(names)? names : [names];
+    for (var i=0;i<hdr.length;i++){
+      for (var j=0;j<list.length;j++){
+        if (hdr[i] === norm(list[j])) return i+1;
+      }
+    }
+    return 0;
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -102,8 +122,7 @@ function buildForecast_All() {
   var SH_SS      = sheetName('SS',      '🍔 СС');
 
   // ────────────────────────────────────────────────────────────────────────
-  // Ч Т Е Н И Е  «🍔 СС»: ТОВАРЫ, ФЛАГ «НЕ ЗАКУПАЕТСЯ», БРЕНД/МОДЕЛЬ/ВАЛЮТА,
-  // КУРСЫ, КОМПЛЕКТЫ O:P:Q
+  // Ч Т Е Н И Е  «🍔 СС» (устойчиво к A:J, доп. блоки — опционально)
   // ────────────────────────────────────────────────────────────────────────
   function readSS_All_(){
     var s = ss.getSheetByName(SH_SS);
@@ -116,46 +135,81 @@ function buildForecast_All() {
     if (!s) return out;
     var lr = s.getLastRow(); if (lr < 2) return out;
 
-    var vals = s.getRange(2,1,lr-1,13).getDisplayValues(); // A:M
-    for (var i=0;i<vals.length;i++){
-      var tv = String(vals[i][0]||'').trim(); if (!tv) continue;      // A
-      var brand = String(vals[i][1]||'').trim();                      // B
-      var model = String(vals[i][2]||'').trim();                      // C
-      var ccCur = num(vals[i][3]);                                    // D
-      var currency = String(vals[i][4] || '').trim();                 // E
-      var nal=num(vals[i][6]), vput=num(vals[i][7]), vpo=num(vals[i][8]), vpw=num(vals[i][9]); // G,H,I,J
-      var notBuy = norm(vals[i][9]) === 'да'; // J = "Не закупается"
+    var lc = s.getLastColumn();
+    var hdr = s.getRange(1,1,1,lc).getDisplayValues()[0];
+
+    // Индексы по заголовкам (A:J обязательно, остальное — опционально)
+    var cTovar = hdrIndex(hdr, 'товар');
+    var cBrand = hdrIndex(hdr, 'производитель');
+    var cModel = hdrIndex(hdr, 'модель');
+    var cCCcur = hdrIndex(hdr, ['cc в валюте', 'сс в валюте']);
+    var cCurr  = hdrIndex(hdr, 'валюта');
+    var cCCUD  = hdrIndex(hdr, ['cc+упак+дост','сс+упак+дост','cc+упак+дост.']);
+    var cNal   = hdrIndex(hdr, 'наличие');
+    var cVput  = hdrIndex(hdr, 'в пути');
+    var cVpost = hdrIndex(hdr, 'в поставке');
+    var cOff   = hdrIndex(hdr, 'не закупается');
+
+    // Чтение A..min(J,lc) по дисплею
+    var readCols = Math.min(lc, Math.max(cTovar,cBrand,cModel,cCCcur,cCurr,cCCUD,cNal,cVput,cVpost,cOff,10));
+    var rowsAJ = s.getRange(2,1,lr-1,readCols).getDisplayValues();
+
+    for (var i=0;i<rowsAJ.length;i++){
+      var row = rowsAJ[i];
+      var tv = String(row[(cTovar||1)-1]||'').trim(); if (!tv) continue;
+
+      var brand = cBrand ? String(row[cBrand-1]||'').trim() : '';
+      var model = cModel ? String(row[cModel-1]||'').trim() : '';
+      var ccCur = cCCcur? num(row[cCCcur-1]) : 0;
+      var curr  = cCurr ? String(row[cCurr-1]||'').trim() : '';
+      // CC+упак+дост сейчас не используется в расчётах форкаста, но сохраняем при желании
+      // var ccud = cCCUD? num(row[cCCUD-1]) : 0;
+
+      var nal   = cNal   ? num(row[cNal-1])   : 0;
+      var vput  = cVput  ? num(row[cVput-1])  : 0;
+      var vpost = cVpost ? num(row[cVpost-1]) : 0;
+
+      var notBuy = cOff ? (norm(row[cOff-1]) === 'да') : false;
       if (notBuy) out.notBuySet.add(tv);
+
       out.goods.set(tv, {
-        brand: brand, model: model, ccCur: isFinite(ccCur)?ccCur:0, currency: currency,
-        nal: isFinite(nal)?nal:0, vput: isFinite(vput)?vput:0, vpostSum: (isFinite(vpo)?vpo:0) + (isFinite(vpw)?vpw:0),
+        brand: brand,
+        model: model,
+        ccCur: isFinite(ccCur)?ccCur:0,
+        currency: curr,
+        nal: isFinite(nal)?nal:0,
+        vput: isFinite(vput)?vput:0,
+        vpostSum: isFinite(vpost)?vpost:0,
         notBuy: notBuy
       });
     }
 
-    // Курсы L:M
-    var valsLM = s.getRange(2,12,lr-1,2).getDisplayValues(); // L,M
-    for (var j=0;j<valsLM.length;j++){
-      var cname = (valsLM[j][0]||'').trim();
-      var rate  = num(valsLM[j][1]);
-      if (!cname) continue;
-      out.rates.set(norm(cname), isFinite(rate)?rate:0);
+    // Курсы L:M — опционально
+    if (lc >= 13){
+      var labels = s.getRange(2,12,lr-1,1).getDisplayValues(); // L
+      var rates  = s.getRange(2,13,lr-1,1).getDisplayValues(); // M
+      for (var r=0;r<labels.length;r++){
+        var name = String(labels[r][0]||'').trim();
+        if (!name) continue;
+        var rate = num(rates[r][0]);
+        out.rates.set(norm(name), isFinite(rate)?rate:0);
+      }
     }
 
-    // Комплекты O:P:Q
-    var lastCol = s.getLastColumn();
-    if (lastCol >= 17){
-      var valsOPQ = s.getRange(2,15,lr-1,3).getDisplayValues(); // O:P:Q
-      for (var k=0;k<valsOPQ.length;k++){
-        var kit = String(valsOPQ[k][0]||'').trim();
-        var comp= String(valsOPQ[k][1]||'').trim();
-        var coef= num(valsOPQ[k][2]);
+    // Комплекты O:P:Q — опционально
+    if (lc >= 17){
+      var kits = s.getRange(2,15,lr-1,3).getDisplayValues(); // O:P:Q
+      for (var k=0;k<kits.length;k++){
+        var kit  = String(kits[k][0]||'').trim();
+        var comp = String(kits[k][1]||'').trim();
+        var coef = num(kits[k][2]);
         if (!kit || !comp) continue;
-        var c = isFinite(coef) ? coef : 0;
+        var c = isFinite(coef)?coef:0;
         if (c <= 0) continue;
         out.kits.push({ kit: kit, comp: comp, coef: c });
       }
     }
+
     return out;
   }
   var SS = readSS_All_();
@@ -379,7 +433,7 @@ function buildForecast_All() {
 
     for (var i=0;i<listForNR.length;i++){
       var tv = listForNR[i];
-      var ssrec = (SS.goods.get(tv) || { nal:0, vput:0 });
+      var ssrec = (SS.goods.get(tv) || { nal:0, vput:0, vpostSum:0 });
 
       var zRaw = sumNeedByTovar_raw.get(tv) || 0; // базовая из T:Z
       var base;
@@ -401,6 +455,7 @@ function buildForecast_All() {
       else P_disp = ''; // обе 0 → пусто
 
       // К закупу:
+      // учитываем на складе и «в пути» (из A:J), «в поставке» в A:J суммарная — по бизнес-логике либо в nal/vput учтёте
       var baseKup = Math.max(0, (P_total + MINIMAL) - (ssrec.nal + ssrec.vput));
       var kup  = (baseKup < 3) ? 0 : ceilToStep(baseKup, ROUNDSTEP);
 

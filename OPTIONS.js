@@ -21,8 +21,8 @@ var KBR_ARROWS = KBR_ARROWS || (function () {
   const INVERT_FLOATING_BORDER = true;  // если грань выглядит «зеркально», поставьте true
 
   // ===== Листы
-  const KBR_SHEET_CALC_NAME   = (typeof SHEET_CALC   === 'string' ? SHEET_CALC   : '⚖️ Калькулятор');
-  const KBR_SHEET_PARAMS_NAME = (typeof SHEET_PARAMS === 'string' ? SHEET_PARAMS : '⚙️ Параметры');
+const KBR_SHEET_CALC_NAME   = (REF && REF.SHEETS && REF.SHEETS.CALC)   || '⚖️ Калькулятор';
+const KBR_SHEET_PARAMS_NAME = (REF && REF.SHEETS && REF.SHEETS.PARAMS) || '⚙️ Параметры';
 
   // ===== Ключи настроек и подписи
   const KBR_BTN_KEYS     = ['метод','расчет','процент'];
@@ -358,25 +358,7 @@ var KBR_ARROWS = KBR_ARROWS || (function () {
     // «Быстрое заполнение»: ничего не трогаем.
   }
 
-  // (вспомогательная, оставлена на будущее)
-  function resolvePlatformTag_() {
-    try {
-      if (typeof REF !== 'undefined' && typeof REF.getCurrentPlatform === 'function') {
-        const t = REF.getCurrentPlatform();
-        if (t === 'WB' || t === 'OZ') return t;
-      }
-    } catch (_) {}
-    try {
-      const ss = SpreadsheetApp.getActive();
-      const sh = ss.getSheetByName(KBR_SHEET_PARAMS_NAME);
-      if (sh) {
-        const raw = String(sh.getRange('I2').getDisplayValue() || '').trim();
-        if (/^(ozon|oz)$/i.test(raw)) return 'OZ';
-        if (/^(wildberries|wb)$/i.test(raw)) return 'WB';
-      }
-    } catch (_) {}
-    return 'OZ';
-  }
+
 
   // Экспорт
   return {
