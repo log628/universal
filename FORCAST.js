@@ -1,11 +1,13 @@
 /** ======================================================================
  * FORCAST.gs — сборка листа «🎏 Форкаст» с учётом централизованного REF
- *  - Использует только REF.SHEETS для имён листов
- *  - «🍔 СС» читается по заголовкам (robust): A:J (обязательно),
- *    L:M — курсы (опционально), O:P:Q — комплекты (опционально)
- *  - Флаг «Не закупается» берётся из столбца с таким заголовком (A:J)
- *  - Не использует «В поставке WB» — единственная колонка «В поставке»
- *  - Резолв «товара» из артикула делегирован в REF.toTovarFromArticle
+ *  - Имена листов из REF.SHEETS
+ *  - «🍔 СС» читается по заголовкам (A:J обязательно), L:M — курсы (опц.), O:P:Q — комплекты (опц.)
+ *  - Флаг «Не закупается» из столбца с таким заголовком (A:J)
+ *  - «В поставке» — единая колонка
+ *  - Резолв товара из артикула делегирован в REF.toTovarFromArticle
+ *  - Шапка на строке 2, данные с 3-й
+ *  - Таблицы: E:I, K:O, Q:W
+ *  - «Побелка» на E1:X[last] (фон, белые границы, сброс цвета шрифта и жирности)
  * ====================================================================== */
 
 function buildForecast_All() {
@@ -50,7 +52,7 @@ function buildForecast_All() {
   }
 
   // ────────────────────────────────────────────────────────────────────────
-  // Ф И Л Ь Т Р Ы  (вкладка 🎏 Форкаст, столбцы B:C)
+  // Ф И Л Ь Т Р Ы  (B:C)
   // ────────────────────────────────────────────────────────────────────────
   function findTitleRowInBC_(title){
     var want = norm(title);
@@ -88,9 +90,7 @@ function buildForecast_All() {
     return out;
   }
 
-  // ────────────────────────────────────────────────────────────────────────
-  // П А Р А М Е Т Р Ы
-  // ────────────────────────────────────────────────────────────────────────
+  // Параметры форкаста (кнопки)
   var TURNOVER   = readNamedNumber('forecast_button_turnover', 0);
   var EMPTYVAL   = readNamedNumber('forecast_button_empty',   0);
   var CHINAONLY  = isTrueNamed('forecast_button_chinaonly');
@@ -122,7 +122,7 @@ function buildForecast_All() {
   var SH_SS      = sheetName('SS',      '🍔 СС');
 
   // ────────────────────────────────────────────────────────────────────────
-  // Ч Т Е Н И Е  «🍔 СС» (устойчиво к A:J, доп. блоки — опционально)
+  // Ч Т Е Н И Е  «🍔 СС»
   // ────────────────────────────────────────────────────────────────────────
   function readSS_All_(){
     var s = ss.getSheetByName(SH_SS);
@@ -150,7 +150,6 @@ function buildForecast_All() {
     var cVpost = hdrIndex(hdr, 'в поставке');
     var cOff   = hdrIndex(hdr, 'не закупается');
 
-    // Чтение A..min(J,lc) по дисплею
     var readCols = Math.min(lc, Math.max(cTovar,cBrand,cModel,cCCcur,cCurr,cCCUD,cNal,cVput,cVpost,cOff,10));
     var rowsAJ = s.getRange(2,1,lr-1,readCols).getDisplayValues();
 
@@ -162,9 +161,6 @@ function buildForecast_All() {
       var model = cModel ? String(row[cModel-1]||'').trim() : '';
       var ccCur = cCCcur? num(row[cCCcur-1]) : 0;
       var curr  = cCurr ? String(row[cCurr-1]||'').trim() : '';
-      // CC+упак+дост сейчас не используется в расчётах форкаста, но сохраняем при желании
-      // var ccud = cCCUD? num(row[cCCUD-1]) : 0;
-
       var nal   = cNal   ? num(row[cNal-1])   : 0;
       var vput  = cVput  ? num(row[cVput-1])  : 0;
       var vpost = cVpost ? num(row[cVpost-1]) : 0;
@@ -224,10 +220,10 @@ function buildForecast_All() {
   }
 
   // ────────────────────────────────────────────────────────────────────────
-  // Ч Т Е Н И Е  А Р Т И К У Л О В  + К А Т Е Г О Р И И (СВ. КАТ.)
+  // Ч Т Е Н И Е  А Р Т И К У Л О В  + С В О Я  К А Т Е Г О Р И Я
   // ────────────────────────────────────────────────────────────────────────
-  function readArticlesWithCategory_(sheetName){
-    var s = ss.getSheetByName(sheetName);
+  function readArticlesWithCategory_(sheetName_){
+    var s = ss.getSheetByName(sheetName_);
     var out = [];
     if (!s) return out;
     var lr = s.getLastRow(), lc = s.getLastColumn();
@@ -251,15 +247,14 @@ function buildForecast_All() {
   var artsWB = wantWB ? readArticlesWithCategory_(SH_ARTS_WB) : [];
 
   // ────────────────────────────────────────────────────────────────────────
-  // Г Р У П П И Р О В К А  П О  Т О В А Р А М  (+ фильтр "не закупается")
+  // Г Р У П П И Р О В К А  П О  Т О В А Р А М  (+ «не закупается»)
   // ────────────────────────────────────────────────────────────────────────
   var byTovar = new Map();
   var tovarCats = new Map();
   function add(platformTag, rec){
     var tv = tovarFromArticle(platformTag, rec.art);
     if (!tv) return;
-    // Фильтр 1: «Не закупается» — исключаем полностью из ВСЕХ таблиц
-    if (SS.notBuySet.has(tv)) return;
+    if (SS.notBuySet.has(tv)) return; // исключаем «не закупается»
 
     if (!byTovar.has(tv)) byTovar.set(tv, { oz:new Set(), wb:new Set() });
     byTovar.get(tv)[platformTag==='OZ'?'oz':'wb'].add(rec.art);
@@ -287,7 +282,6 @@ function buildForecast_All() {
     return a.localeCompare(b);
   });
 
-  // Фильтр 4: CHINAONLY (валюта не-рубль)
   var TOVARS_CHINA = TOVARS_ALL.filter(function(tv){
     if (!CHINAONLY) return true;
     var rec = SS.goods.get(tv);
@@ -297,12 +291,12 @@ function buildForecast_All() {
   });
 
   // ────────────────────────────────────────────────────────────────────────
-  // Ф И З . О Б О Р О Т  (по артикулу, раздельно OZ/WB)
+  // Ф И З . О Б О Р О Т
   // ────────────────────────────────────────────────────────────────────────
-  function readFizMapsByArticle_(sheetName, enabled){
+  function readFizMapsByArticle_(sheetName_, enabled){
     var maps = { fbo:new Map(), spd:new Map() };
     if (!enabled) return maps;
-    var s = ss.getSheetByName(sheetName);
+    var s = ss.getSheetByName(sheetName_);
     if (!s) return maps;
     var lr = s.getLastRow(); if (lr < 2 || s.getLastColumn() < 4) return maps;
     var vals = s.getRange(2,2,lr-1,3).getDisplayValues(); // B=art, C=fbo, D=spd
@@ -319,7 +313,7 @@ function buildForecast_All() {
   var fizWB = readFizMapsByArticle_(SH_FIZ_WB, wantWB);
 
   // ────────────────────────────────────────────────────────────────────────
-  // Р А С Ч Ё Т  «П О Т Р Е Б Н О С Т И»  Д Л Я  А Р Т И К У Л О В  (T:Z)
+  // Р А С Ч Ё Т  «П О Т Р Е Б Н О С Т И»  Д Л Я  А Р Т И К У Л О В  (Q:W)
   // ────────────────────────────────────────────────────────────────────────
   function calcNeedAndTag(FBO_OZ,FBO_WB,SPD_OZ,SPD_WB){
     var bothZero = (FBO_OZ===0 && FBO_WB===0 && SPD_OZ===0 && SPD_WB===0);
@@ -332,12 +326,11 @@ function buildForecast_All() {
   }
 
   // ────────────────────────────────────────────────────────────────────────
-  // П О Д Г О Т О В К А  Д А Н Н Ы Х  T:Z  (товары+артикулы с агрегированием)
+  // П О Д Г О Т О В К А  Д А Н Н Ы Х  Q:W
   // ────────────────────────────────────────────────────────────────────────
   var rowsTZ = [];
   var productIdx = [];
-  var sumNeedByTovar_raw = new Map(); // сумма Z по артикульным строкам товара (до комплектов)
-
+  var sumNeedByTovar_raw = new Map();
   var nothingToCollect = (!wantOZ && !wantWB) || (categoriesBlockFound && enabledCatOrderNorm.length===0);
 
   var T_sorted = Array.from(TOVARS_CHINA).sort(function(a,b){
@@ -357,7 +350,7 @@ function buildForecast_All() {
       var sumFBO_OZ=0,sumFBO_WB=0,sumSPD_OZ=0,sumSPD_WB=0,sumNeed=0;
 
       var idx = rowsTZ.length;
-      rowsTZ.push(['  '+tv, (ozCount+' | '+wbCount), 0,0,0,0,0]); // T..Z
+      rowsTZ.push(['  '+tv, (ozCount+' | '+wbCount), 0,0,0,0,0]); // Q..W
       productIdx.push(idx);
 
       function pushArts(tag, list){
@@ -387,7 +380,7 @@ function buildForecast_All() {
   }
 
   // ────────────────────────────────────────────────────────────────────────
-  // К О М П Л Е К Т Ы  и  «В Т О Р О Й  Т И П»
+  // К О М П Л Е К Т Ы
   // ────────────────────────────────────────────────────────────────────────
   var compSecondType = new Set(); // товары с O==P
   (SS.kits||[]).forEach(function(edge){
@@ -400,7 +393,6 @@ function buildForecast_All() {
     return norm(rec.brand) === 'комплект';
   }
 
-  // selfCoef для «второго типа»
   var selfCoef = new Map(); // tv -> sum Q для строк O==P==tv
   (SS.kits||[]).forEach(function(edge){
     if (edge.kit && edge.comp && edge.kit === edge.comp){
@@ -408,14 +400,13 @@ function buildForecast_All() {
     }
   });
 
-  // Добавки от комплектов к компонентам (исключая self, он идёт в base)
   var addFromKits = new Map();
   (SS.kits||[]).forEach(function(edge){
     var kit = edge.kit, comp = edge.comp, c = edge.coef;
     if (!kit || !comp || c<=0) return;
     if (kit === comp) return; // self — в base для второго типа
 
-    if (!sumNeedByTovar_raw.has(kit)) return; // комплект не прошёл фильтры → нет вклада
+    if (!sumNeedByTovar_raw.has(kit)) return;
     var zKit = sumNeedByTovar_raw.get(kit) || 0;
     if (zKit <= 0) return;
 
@@ -423,23 +414,23 @@ function buildForecast_All() {
   });
 
   // ────────────────────────────────────────────────────────────────────────
-  // Т А Б Л И Ц А  N:R — по товарам (без «обычных комплектов»)
+  // Т А Б Л И Ц А  K:O — по товарам (без обычных комплектов)
   // ────────────────────────────────────────────────────────────────────────
   var rowsNR = [];
   if (!nothingToCollect){
     var listForNR = T_sorted.filter(function(tv){
-      return !isBrandKit(tv); // обычные комплекты исключаем
+      return !isBrandKit(tv);
     });
 
     for (var i=0;i<listForNR.length;i++){
       var tv = listForNR[i];
       var ssrec = (SS.goods.get(tv) || { nal:0, vput:0, vpostSum:0 });
 
-      var zRaw = sumNeedByTovar_raw.get(tv) || 0; // базовая из T:Z
+      var zRaw = sumNeedByTovar_raw.get(tv) || 0;
       var base;
       if (compSecondType.has(tv)){
         var sc = selfCoef.get(tv) || 0;
-        base = zRaw * sc; // база для второго типа — Z * coef_self
+        base = zRaw * sc;
       } else {
         base = zRaw;
       }
@@ -447,15 +438,12 @@ function buildForecast_All() {
       var plusFromKits = addFromKits.get(tv) || 0;
       var P_total = base + plusFromKits;
 
-      // Строковое P — БЕЗ ПРОБЕЛА перед "+"
       var P_disp = '';
       if (base > 0 && plusFromKits > 0) P_disp = String(base) + '+' + String(plusFromKits);
       else if (base <= 0 && plusFromKits > 0) P_disp = '+' + String(plusFromKits);
       else if (base > 0 && plusFromKits <= 0) P_disp = String(base);
-      else P_disp = ''; // обе 0 → пусто
+      else P_disp = '';
 
-      // К закупу:
-      // учитываем на складе и «в пути» (из A:J), «в поставке» в A:J суммарная — по бизнес-логике либо в nal/vput учтёте
       var baseKup = Math.max(0, (P_total + MINIMAL) - (ssrec.nal + ssrec.vput));
       var kup  = (baseKup < 3) ? 0 : ceilToStep(baseKup, ROUNDSTEP);
 
@@ -464,7 +452,7 @@ function buildForecast_All() {
   }
 
   // ────────────────────────────────────────────────────────────────────────
-  // Т А Б Л И Ц А  F:J — к закупу (из N:R, где O>0)
+  // Т А Б Л И Ц А  E:I — «к закупу» из K:O (qty>0)
   // ────────────────────────────────────────────────────────────────────────
   function catKeyForTovar(tv){
     var idx = categoryIndexForTovar(tv);
@@ -517,246 +505,271 @@ function buildForecast_All() {
   });
 
   // ────────────────────────────────────────────────────────────────────────
-  // Х Р О Н О Л О Г И Я  П Е Р Е Р И С О В К И
+  // Р И С О В К А
   // ────────────────────────────────────────────────────────────────────────
-  var lastRowSheet = Math.max(sh.getMaxRows(), 2);
   var WHITE = '#ffffff';
+  var BLACK = '#000000';
   var SOLID = SpreadsheetApp.BorderStyle.SOLID;
+  var HDR_ROW  = 2; // строка заголовков
+  var DATA_ROW = 3; // старт данных
 
-  // (1) Очистка контента
-  sh.getRange(1,14,lastRowSheet,5).clearContent(); // N:R
-  sh.getRange(1,20,lastRowSheet,7).clearContent(); // T:Z
-  sh.getRange(1,6 ,lastRowSheet,5).clearContent(); // F:J
+  // 0) Общая «побелка» по прямоугольнику E1:X[last]:
+  var lastRowSheet = Math.max(sh.getMaxRows(), HDR_ROW);
+  var bleach = sh.getRange(1,5, lastRowSheet, 24-5+1); // E..X
+  bleach.clearContent()
+        .setBackground(WHITE)
+        .setBorder(true,true,true,true,true,true,WHITE,SOLID) // белая «сетка»
+        .setFontFamily('Roboto').setFontSize(10)
+        .setFontColor('#000000').setFontWeight('normal');
 
-  // (2) Обеление и белые границы
-  sh.getRange(1,14,lastRowSheet,5).setBackground(WHITE).setBorder(true,true,true,true,true,true,WHITE,SOLID);
-  sh.getRange(1,20,lastRowSheet,7).setBackground(WHITE).setBorder(true,true,true,true,true,true,WHITE,SOLID);
-  sh.getRange(1,6 ,lastRowSheet,5).setBackground(WHITE).setBorder(true,true,true,true,true,true,WHITE,SOLID);
+  // Базовые ширины колонок по заданию
+  sh.setColumnWidth(1, 25);   // A
+  sh.setColumnWidth(2, 60);   // B
+  sh.setColumnWidth(3,160);   // C
+  sh.setColumnWidth(4, 50);   // D
+  sh.setColumnWidth(10,35);   // J (прокладка)
+  sh.setColumnWidth(16,35);   // P (прокладка)
 
-  // (3) Сброс границ под будущие области
-  var tzRows = Math.max(rowsTZ.length, 1), nrRows = Math.max(rowsNR.length, 1), fjRows = Math.max(rowsFJ.length, 1);
-  var tzLast = 1 + tzRows; // header 1 + data
-  var nrLast = 1 + nrRows;
-  var fjLast = 1 + fjRows;
+  // Вспомогательный локальный «сброс границ» (шапка+данные области вставки)
+  function clearBordersLocal_(row1, col1, height, width){
+    sh.getRange(row1, col1, Math.max(height,1), Math.max(width,1))
+      .setBorder(false,false,false,false,false,false,null,null);
+  }
 
-  sh.getRange(1,20,Math.max(tzLast,1),7).setBorder(false,false,false,false,false,false,null,null); // T:Z
-  sh.getRange(1,14,Math.max(nrLast,1),5).setBorder(false,false,false,false,false,false,null,null); // N:R
-  sh.getRange(1,6 ,Math.max(fjLast,1),5).setBorder(false,false,false,false,false,false,null,null); // F:J
+  // ── Таблица Q:W ─────────────────────────────────────────────────────────
+  (function draw_QW(){
+    var totalData = Math.max(rowsTZ.length, 0);
+    var usedRow = totalData ? (DATA_ROW - 1 + rowsTZ.length) : HDR_ROW;
 
-  // (4) Рисуем таблицы
+    // Локальный «сброс границ» (шапка+данные)
+    clearBordersLocal_(HDR_ROW, 17, usedRow - HDR_ROW + 1, 7); // Q..W
 
-  // ── Таблица T:Z ─────────────────────────────────────────────────────────
-  (function draw_TZ(){
-    var DATA_START=2, totalRows = Math.max(rowsTZ.length, 1), usedRow = DATA_START - 1 + rowsTZ.length;
+    // Шапка (строка 2)
+    sh.getRange(HDR_ROW,17).setValue('Товар / Артикул'); // Q2
+    sh.getRange(HDR_ROW,18).setValue('МП');               // R2
+    sh.getRange(HDR_ROW,19,1,1).setValue('Остаток FBO');  // S2:T2 merged
+    sh.getRange(HDR_ROW,21,1,1).setValue('Скорость');     // U2:V2 merged
+    sh.getRange(HDR_ROW,23).setValue('Потребность');      // W2
+    sh.getRange(HDR_ROW,19,1,2).merge(); // S2:T2
+    sh.getRange(HDR_ROW,21,1,2).merge(); // U2:V2
 
-    // Шапка
-    sh.getRange(1,20).setValue('Товар / Артикул');   // T
-    sh.getRange(1,21).setValue('МП');                 // U
-    sh.getRange(1,22).setValue('Остаток FBO');        // V:W merged
-    sh.getRange(1,24).setValue('Скорость');           // X:Y merged
-    sh.getRange(1,26).setValue('Потребность');        // Z
-    sh.getRange(1,22,1,2).merge(); // V1:W1
-    sh.getRange(1,24,1,2).merge(); // X1:Y1
+    var DARK='#434343', FBO_D='#274e13', SPD_D='#1c4587', NEED_D='#741b47';
+    sh.getRange(HDR_ROW,17,1,2).setBackground(DARK);     // Q:R
+    sh.getRange(HDR_ROW,19,1,2).setBackground(FBO_D);    // S:T
+    sh.getRange(HDR_ROW,21,1,2).setBackground(SPD_D);    // U:V
+    sh.getRange(HDR_ROW,23,1,1).setBackground(NEED_D);   // W
 
-    var WHITE='#ffffff', DARK='#434343', FBO_D='#274e13', SPD_D='#1c4587', NEED_D='#741b47';
-    sh.getRange(1,20,1,2).setBackground(DARK);
-    sh.getRange(1,22,1,2).setBackground(FBO_D);
-    sh.getRange(1,24,1,2).setBackground(SPD_D);
-    sh.getRange(1,26,1,1).setBackground(NEED_D);
-
-    var header = sh.getRange(1,20,1,7);
-    header.setFontColor(WHITE).setFontFamily('Roboto').setFontSize(12)
+    var header = sh.getRange(HDR_ROW,17,1,7);
+    header.setFontColor('#ffffff').setFontFamily('Roboto').setFontSize(10)
           .setHorizontalAlignment('center').setVerticalAlignment('middle')
           .setFontWeight('bold')
           .setBorder(true,true,true,true,true,true);
 
-    if (rowsTZ.length) sh.getRange(DATA_START,20,rowsTZ.length,7).setValues(rowsTZ);
-    sh.getRange(DATA_START,20,totalRows,7).setFontFamily('Roboto').setFontSize(12)
+    // Данные (с 3-й строки)
+    if (rowsTZ.length) sh.getRange(DATA_ROW,17,rowsTZ.length,7).setValues(rowsTZ);
+    var totalRows = Math.max(rowsTZ.length, 1);
+    sh.getRange(DATA_ROW,17,totalRows,7).setFontFamily('Roboto').setFontSize(10)
       .setHorizontalAlignment('center').setVerticalAlignment('middle');
-    sh.getRange(DATA_START,20,totalRows,1)
+    sh.getRange(DATA_ROW,17,totalRows,1)
       .setHorizontalAlignment('left').setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
 
     if (totalRows>0){
-      sh.getRange(DATA_START,22,totalRows,2).setBackground('#d9ead3'); // V:W
-      sh.getRange(DATA_START,24,totalRows,2).setBackground('#c9daf8'); // X:Y
-      sh.getRange(DATA_START,26,totalRows,1).setBackground('#ead1dc'); // Z
+      sh.getRange(DATA_ROW,19,totalRows,2).setBackground('#d9ead3'); // S:T
+      sh.getRange(DATA_ROW,21,totalRows,2).setBackground('#c9daf8'); // U:V
+      sh.getRange(DATA_ROW,23,totalRows,1).setBackground('#ead1dc'); // W
     }
 
     var INT='#,##0;-#,##0;;@', DEC2='#,##0.00;-#,##0.00;;@';
     if (totalRows>0){
-      sh.getRange(DATA_START,22,totalRows,2).setNumberFormat(INT);
-      sh.getRange(DATA_START,24,totalRows,2).setNumberFormat(DEC2);
-      sh.getRange(DATA_START,26,totalRows,1).setNumberFormat(INT);
+      sh.getRange(DATA_ROW,19,totalRows,2).setNumberFormat(INT);  // S:T
+      sh.getRange(DATA_ROW,21,totalRows,2).setNumberFormat(DEC2); // U:V
+      sh.getRange(DATA_ROW,23,totalRows,1).setNumberFormat(INT);  // W
     }
 
-    // Сброс стиля Z перед точечной раскраской (важно для повторных запусков)
+    // Сброс стиля W (потребность) перед точечной раскраской
     if (totalRows>0){
-      sh.getRange(DATA_START,26,totalRows,1).setFontColor('#000000').setFontWeight('normal');
+      sh.getRange(DATA_ROW,23,totalRows,1).setFontColor('#000000').setFontWeight('normal');
     }
 
-    var BLACK='#000000', SOLID=SpreadsheetApp.BorderStyle.SOLID;
-    var prodExcelRows = new Set(productIdx.map(function(i){ return DATA_START + i; }));
+    var prodExcelRows = new Set(productIdx.map(function(i){ return DATA_ROW + i; }));
 
     for (var i=0;i<rowsTZ.length;i++){
-      var r = DATA_START + i;
+      var r = DATA_ROW + i;
       if (prodExcelRows.has(r)){
-        // строка ТОВАРА: общий серый фон, жирный, чёрный текст (в т.ч. Z)
-        sh.getRange(r,20,1,7).setBackground('#cccccc').setFontWeight('bold')
+        // строка ТОВАРА
+        sh.getRange(r,17,1,7).setBackground('#cccccc').setFontWeight('bold')
           .setBorder(true,null,true,null,null,null,BLACK,SOLID);
-        sh.getRange(r,26,1,1).setFontColor('#000000'); // Z чёрный
+        sh.getRange(r,23,1,1).setFontColor('#000000');
       } else {
-        // строка АРТИКУЛА
-        sh.getRange(r,20,1,2).setBackground('#f3f3f3'); // T:U
+        // строка АРТИКУЛА → Q:R светло-серый фон
+        sh.getRange(r,17,1,2).setBackground('#f3f3f3'); // Q:R
         var row = rowsTZ[i];
         var FBO_OZ=Number(row[2]), FBO_WB=Number(row[3]), SPD_OZ=Number(row[4]), SPD_WB=Number(row[5]), NEED=Number(row[6]);
         if (FBO_OZ===0 && FBO_WB===0 && SPD_OZ===0 && SPD_WB===0) {
-          sh.getRange(r,26).setFontWeight('bold').setFontColor('#e69138');
+          sh.getRange(r,23).setFontWeight('bold').setFontColor('#e69138');
         } else if (NEED>0) {
-          sh.getRange(r,26).setFontWeight('bold').setFontColor('#0000ff');
+          sh.getRange(r,23).setFontWeight('bold').setFontColor('#0000ff');
         }
       }
     }
 
-    function rb(c){ sh.getRange(1,c,Math.max(usedRow,1),1).setBorder(null,null,null,true,null,null,BLACK,SOLID); }
-    function lb(c){ sh.getRange(1,c,Math.max(usedRow,1),1).setBorder(null,true,null,null,null,null,BLACK,SOLID); }
-    lb(20); rb(26); // внешний
-    rb(21);         // U | V
-    rb(23);         // W | X
-    rb(25);         // Y | Z
-    if (rowsTZ.length) sh.getRange(usedRow,20,1,7).setBorder(null,null,true,null,null,null,BLACK,SOLID);
+    // Контуры и вертикальные «грани»
+    function rb(c){ sh.getRange(HDR_ROW,c,Math.max(usedRow-HDR_ROW+1,1),1).setBorder(null,null,null,true,null,null,BLACK,SOLID); }
+    function lb(c){ sh.getRange(HDR_ROW,c,Math.max(usedRow-HDR_ROW+1,1),1).setBorder(null,true,null,null,null,null,BLACK,SOLID); }
+    lb(17); rb(23); // внешний контур Q..W
+    rb(18);         // R | S
+    rb(20);         // T | U
+    rb(22);         // V | W
+    if (rowsTZ.length) sh.getRange(usedRow,17,1,7).setBorder(null,null,true,null,null,null,BLACK,SOLID);
 
-    sh.autoResizeColumn(20); sh.setColumnWidth(20, sh.getColumnWidth(20)+50); // T
-    sh.setColumnWidth(21, 90);   // U
-    sh.setColumnWidths(22,2,75); // V:W
-    sh.setColumnWidths(24,2,75); // X:Y
-    sh.setColumnWidth(26,110);   // Z
+    // Ширины
+    sh.autoResizeColumn(17); sh.setColumnWidth(17, sh.getColumnWidth(17)+50); // Q
+    sh.setColumnWidth(18, 55); // R = 55
+    sh.setColumnWidths(19, 2, 65); // S:T = 65
+    sh.setColumnWidths(21, 2, 65); // U:V = 65
+    sh.setColumnWidth(23,110); // W
   })();
 
-  // ── Таблица N:R ─────────────────────────────────────────────────────────
-  (function draw_NR(){
-    var DATA_START=2, totalRows = Math.max(rowsNR.length, 1), usedRow = DATA_START - 1 + rowsNR.length;
+  // ── Таблица K:O ─────────────────────────────────────────────────────────
+  (function draw_KO(){
+    var totalData = Math.max(rowsNR.length, 0);
+    var usedRow = totalData ? (DATA_ROW - 1 + rowsNR.length) : HDR_ROW;
 
-    sh.getRange(1,14).setValue('Товар');       // N
-    sh.getRange(1,15).setValue('К закупу');    // O
-    sh.getRange(1,16).setValue('Потребность'); // P (строковое "base+add")
-    sh.getRange(1,17).setValue('Налич');       // Q
-    sh.getRange(1,18).setValue('Путь');        // R
+    // Локальный «сброс границ»
+    clearBordersLocal_(HDR_ROW, 11, usedRow - HDR_ROW + 1, 5); // K..O
 
-    var WHITE='#ffffff', DARK='#434343', NEED_D='#741b47', WH_D='#783f04';
-    sh.getRange(1,14,1,2).setBackground(DARK);     // N:O
-    sh.getRange(1,16,1,1).setBackground(NEED_D);   // P
-    sh.getRange(1,17,1,2).setBackground(WH_D);     // Q:R
+    // Шапка
+    sh.getRange(HDR_ROW,11).setValue('Товар');       // K2
+    sh.getRange(HDR_ROW,12).setValue('К закупу');    // L2
+    sh.getRange(HDR_ROW,13).setValue('Потребность'); // M2 (строковое "base+add")
+    sh.getRange(HDR_ROW,14).setValue('Налич');       // N2
+    sh.getRange(HDR_ROW,15).setValue('Путь');        // O2
 
-    var header = sh.getRange(1,14,1,5);
-    header.setFontColor(WHITE).setFontFamily('Roboto').setFontSize(12)
+    var DARK='#434343', NEED_D='#741b47', WH_D='#783f04';
+    sh.getRange(HDR_ROW,11,1,2).setBackground(DARK);     // K:L
+    sh.getRange(HDR_ROW,13,1,1).setBackground(NEED_D);   // M
+    sh.getRange(HDR_ROW,14,1,2).setBackground(WH_D);     // N:O
+
+    var header = sh.getRange(HDR_ROW,11,1,5);
+    header.setFontColor('#ffffff').setFontFamily('Roboto').setFontSize(10)
           .setHorizontalAlignment('center').setVerticalAlignment('middle')
           .setFontWeight('bold')
           .setBorder(true,true,true,true,true,true);
 
-    if (rowsNR.length) sh.getRange(DATA_START,14,rowsNR.length,5).setValues(rowsNR);
-    sh.getRange(DATA_START,14,totalRows,5).setFontFamily('Roboto').setFontSize(12)
+    // Данные
+    if (rowsNR.length) sh.getRange(DATA_ROW,11,rowsNR.length,5).setValues(rowsNR);
+    var totalRows = Math.max(rowsNR.length, 1);
+    sh.getRange(DATA_ROW,11,totalRows,5).setFontFamily('Roboto').setFontSize(10)
       .setVerticalAlignment('middle').setHorizontalAlignment('center');
 
-    // N — слева, обрезать; O — центр; N:O фон как для артикулов (#f3f3f3)
-    sh.getRange(DATA_START,14,totalRows,1)
+    // K — слева; L — центр; K:L фон #f3f3f3
+    sh.getRange(DATA_ROW,11,totalRows,1)
       .setHorizontalAlignment('left')
       .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP)
       .setBackground('#f3f3f3');
-    sh.getRange(DATA_START,15,totalRows,1)
+    sh.getRange(DATA_ROW,12,totalRows,1)
       .setHorizontalAlignment('center')
       .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP)
       .setBackground('#f3f3f3');
 
     if (rowsNR.length){
-      sh.getRange(DATA_START,16,rowsNR.length,1).setBackground('#ead1dc'); // P
-      sh.getRange(DATA_START,17,rowsNR.length,2).setBackground('#fce5cd'); // Q:R
+      sh.getRange(DATA_ROW,13,rowsNR.length,1).setBackground('#ead1dc'); // M
+      sh.getRange(DATA_ROW,14,rowsNR.length,2).setBackground('#fce5cd'); // N:O
 
       var INT='#,##0;-#,##0;;@';
-      sh.getRange(DATA_START,15,rowsNR.length,1).setNumberFormat(INT); // O
-      sh.getRange(DATA_START,17,rowsNR.length,2).setNumberFormat(INT); // Q:R
+      sh.getRange(DATA_ROW,12,rowsNR.length,1).setNumberFormat(INT); // L
+      sh.getRange(DATA_ROW,14,rowsNR.length,2).setNumberFormat(INT); // N:O
     }
 
-    // Границы: внешний + O|P и P|Q
-    var BLACK='#000000', SOLID=SpreadsheetApp.BorderStyle.SOLID;
-    function rb(c){ sh.getRange(1,c,Math.max(usedRow,1),1).setBorder(null,null,null,true,null,null,BLACK,SOLID); }
-    function lb(c){ sh.getRange(1,c,Math.max(usedRow,1),1).setBorder(null,true,null,null,null,null,BLACK,SOLID); }
-    lb(14); rb(18);
-    rb(15); // O | P
-    rb(16); // P | Q
-    if (rowsNR.length) sh.getRange(usedRow,14,1,5).setBorder(null,null,true,null,null,null,BLACK,SOLID);
+    // Границы
+    function rb(c){ sh.getRange(HDR_ROW,c,Math.max(usedRow-HDR_ROW+1,1),1).setBorder(null,null,null,true,null,null,BLACK,SOLID); }
+    function lb(c){ sh.getRange(HDR_ROW,c,Math.max(usedRow-HDR_ROW+1,1),1).setBorder(null,true,null,null,null,null,BLACK,SOLID); }
+    lb(11); rb(15); // внешний контур K..O
+    rb(12); // L | M
+    rb(13); // M | N
+    if (rowsNR.length) sh.getRange(usedRow,11,1,5).setBorder(null,null,true,null,null,null,BLACK,SOLID);
 
-    sh.autoResizeColumn(14); sh.setColumnWidth(14, sh.getColumnWidth(14)+50); // N
-    sh.setColumnWidths(15,2,110); // O:P
-    sh.setColumnWidths(17,2,60);  // Q:R
+    // Ширины
+    sh.autoResizeColumn(11); sh.setColumnWidth(11, sh.getColumnWidth(11)+50); // K
+    sh.setColumnWidths(12,2,110); // L:M
+    sh.setColumnWidths(14,2, 60); // N:O
   })();
 
-  // ── Таблица F:J ─────────────────────────────────────────────────────────
-  (function draw_FJ(){
-    var DATA_START=2, totalRows = Math.max(rowsFJ.length, 1), usedRow = DATA_START - 1 + rowsFJ.length;
+  // ── Таблица E:I ─────────────────────────────────────────────────────────
+  (function draw_EI(){
+    var totalData = Math.max(rowsFJ.length, 0);
+    var usedRow = totalData ? (DATA_ROW - 1 + rowsFJ.length) : HDR_ROW;
 
-    sh.getRange(1,6 ).setValue('Товар');     // F
-    sh.getRange(1,7 ).setValue('Бренд');     // G
-    sh.getRange(1,8 ).setValue('Модель');    // H
-    sh.getRange(1,9 ).setValue('Количество');// I
-    sh.getRange(1,10).setValue('Стоимость'); // J
+    // Локальный «сброс границ»
+    clearBordersLocal_(HDR_ROW, 5, usedRow - HDR_ROW + 1, 5); // E..I
 
-    var WHITE='#ffffff', DARK='#434343';
-    sh.getRange(1,6,1,5).setBackground(DARK)
-      .setFontColor(WHITE).setFontWeight('bold')
-      .setFontFamily('Roboto').setFontSize(12)
+    // Шапка
+    sh.getRange(HDR_ROW,5 ).setValue('Товар');      // E2
+    sh.getRange(HDR_ROW,6 ).setValue('Бренд');      // F2
+    sh.getRange(HDR_ROW,7 ).setValue('Модель');     // G2
+    sh.getRange(HDR_ROW,8 ).setValue('Количество'); // H2
+    sh.getRange(HDR_ROW,9 ).setValue('Стоимость');  // I2
+
+    sh.getRange(HDR_ROW,5,1,5).setBackground('#434343')
+      .setFontColor('#ffffff').setFontWeight('bold')
+      .setFontFamily('Roboto').setFontSize(10)
       .setHorizontalAlignment('center').setVerticalAlignment('middle')
       .setBorder(true,true,true,true,true,true);
 
-    if (rowsFJ.length) sh.getRange(DATA_START,6,rowsFJ.length,5).setValues(rowsFJ);
-    sh.getRange(DATA_START,6,totalRows,5).setFontFamily('Roboto').setFontSize(12)
+    // Данные
+    if (rowsFJ.length) sh.getRange(DATA_ROW,5,rowsFJ.length,5).setValues(rowsFJ);
+    var totalRows = Math.max(rowsFJ.length, 1);
+    sh.getRange(DATA_ROW,5,totalRows,5).setFontFamily('Roboto').setFontSize(10)
       .setVerticalAlignment('middle');
 
-    // F — «товар»: серый, жирный, слева, обрезать
-    sh.getRange(DATA_START,6,totalRows,1)
+    // E — «товар»: серый, жирный, слева; F:G — как артикулы; H:I — числа
+    sh.getRange(DATA_ROW,5,totalRows,1)
       .setHorizontalAlignment('left')
       .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP)
       .setBackground('#cccccc')
       .setFontWeight('bold');
 
-    // G:H — «как артикулы»: слева, обрезать, фон #f3f3f3
-    sh.getRange(DATA_START,7,totalRows,2)
+    sh.getRange(DATA_ROW,6,totalRows,2)
       .setHorizontalAlignment('left')
       .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP)
       .setBackground('#f3f3f3');
 
-    // I:J — центр, фон как G:H, целые числа
     var INT='#,##0;-#,##0;;@';
-    sh.getRange(DATA_START,9,totalRows,2)
+    sh.getRange(DATA_ROW,8,totalRows,2) // H:I
       .setHorizontalAlignment('center')
       .setBackground('#f3f3f3');
-    sh.getRange(DATA_START,9,totalRows,1).setNumberFormat(INT);  // I
-    sh.getRange(DATA_START,10,totalRows,1).setNumberFormat(INT); // J
+    sh.getRange(DATA_ROW,8,totalRows,1).setNumberFormat(INT);  // H
+    sh.getRange(DATA_ROW,9,totalRows,1).setNumberFormat(INT);  // I
 
-    // Внешний контур + вертикальная грань F|G
-    var BLACK='#000000', SOLID=SpreadsheetApp.BorderStyle.SOLID;
-    function rb(c){ sh.getRange(1,c,Math.max(usedRow,1),1).setBorder(null,null,null,true,null,null,BLACK,SOLID); }
-    function lb(c){ sh.getRange(1,c,Math.max(usedRow,1),1).setBorder(null,true,null,null,null,null,BLACK,SOLID); }
-    lb(6); rb(10);
-    rb(6); // F | G
-    if (rowsFJ.length) sh.getRange(usedRow,6,1,5).setBorder(null,null,true,null,null,null,BLACK,SOLID);
+    // Контуры
+    function rb(c){ sh.getRange(HDR_ROW,c,Math.max(usedRow-HDR_ROW+1,1),1).setBorder(null,null,null,true,null,null,BLACK,SOLID); }
+    function lb(c){ sh.getRange(HDR_ROW,c,Math.max(usedRow-HDR_ROW+1,1),1).setBorder(null,true,null,null,null,null,BLACK,SOLID); }
+    lb(5); rb(9); // внешний контур E..I
+    rb(5);        // E | F
+    if (rowsFJ.length) sh.getRange(usedRow,5,1,5).setBorder(null,null,true,null,null,null,BLACK,SOLID);
 
     // Горизонтальные разделители между брендами
     if (rowsFJData.length > 1){
       for (var i=1;i<rowsFJData.length;i++){
         if (rowsFJData[i].brand !== rowsFJData[i-1].brand){
-          var r = DATA_START + i;
-          sh.getRange(r,6,1,5).setBorder(true,null,null,null,null,null,BLACK,SOLID);
+          var r = DATA_ROW + i;
+          sh.getRange(r,5,1,5).setBorder(true,null,null,null,null,null,BLACK,SOLID);
         }
       }
     }
 
-    // Ширины: F:G:H авто +15; I:J по 110
-    sh.autoResizeColumn(6);  sh.setColumnWidth(6,  sh.getColumnWidth(6)+15);
-    sh.autoResizeColumn(7);  sh.setColumnWidth(7,  sh.getColumnWidth(7)+15);
-    sh.autoResizeColumn(8);  sh.setColumnWidth(8,  sh.getColumnWidth(8)+15);
-    sh.setColumnWidth(9, 110);
-    sh.setColumnWidth(10,110);
+    // Ширины
+    sh.autoResizeColumn(5);  sh.setColumnWidth(5,  sh.getColumnWidth(5)+15); // E
+    sh.autoResizeColumn(6);  sh.setColumnWidth(6,  sh.getColumnWidth(6)+15); // F
+    sh.autoResizeColumn(7);  sh.setColumnWidth(7,  sh.getColumnWidth(7)+15); // G
+    sh.setColumnWidth(8,110); // H
+    sh.setColumnWidth(9,110); // I
   })();
+
+  // И ещё фикс ширины по заданию (вне таблиц)
+  sh.setColumnWidth(18, 55);      // R (повторно, на случай внешних правок)
+  sh.setColumnWidths(19,2,65);    // S:T
+  sh.setColumnWidths(21,2,65);    // U:V
 
   // Без закрепления строк
   try { sh.setFrozenRows(0); } catch(_){}
