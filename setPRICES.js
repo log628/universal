@@ -1,4 +1,7 @@
-/** Универсальная отправка цен из «⚖️ Калькулятор» в включённую площадку (⚙️ Параметры!I2) */
+/** =========================================================
+ * Универсальная отправка цен из «⚖️ Калькулятор» в включённую площадку (⚙️ Параметры!I2)
+ * + Подробный WB-лог со статусами/ошибками/карантином в лист «🛠 Тех. лог» (с H)
+ * ========================================================= */
 function sendPricesFromCalculatorFast() {
   var T0 = Date.now();
   function log(label, extra) {
@@ -13,12 +16,26 @@ function sendPricesFromCalculatorFast() {
     if (!shCalc || !shPar) throw new Error('Не найден «⚖️ Калькулятор» или «⚙️ Параметры»');
 
     // Площадка строго из I2
-    var platRaw = String(shPar.getRange('I2').getDisplayValue() || '').trim().toUpperCase();
-    var PLAT = (platRaw === 'WILDBERRIES' || platRaw === 'WB') ? 'WB' : 'OZ';
+// === Площадка ТОЛЬКО из именованного muff_mp (REF.NAMED.MP_CTRL)
+var rMP   = (REF && REF.NAMED && REF.NAMED.MP_CTRL) ? ss.getRangeByName(REF.NAMED.MP_CTRL) : null;
+var mpRaw = rMP ? String(rMP.getDisplayValue() || '').trim() : '';
+var PLAT  = (function (s) {
+  if (REF && typeof REF.platformCanon === 'function') {
+    var c = REF.platformCanon(s);            // 'OZ' | 'WB' | null
+    if (c) return c;
+  }
+  if (/wb|wildberries/i.test(s)) return 'WB'; // мягкая догадка
+  if (/^oz|ozon/i.test(s))       return 'OZ';
+  return null;
+})(mpRaw);
+if (!PLAT) throw new Error('Не распознана площадка в именованном диапазоне muff_mp. Значение: "' + mpRaw + '"');
+log('platform detect', 'muff_mp="' + mpRaw + '" -> ' + PLAT);
 
-    // Текущий кабинет
-    var cabinet = String(shCalc.getRange('B3:E4').getDisplayValue() || '').trim();
-    if (!cabinet) throw new Error('Не выбран кабинет (⚖️ Калькулятор!B3:E4)');
+// === Кабинет ТОЛЬКО из именованного muff_cabs
+var cabinet = (REF && typeof REF.getCabinetControlValue === 'function') ? REF.getCabinetControlValue() : '';
+if (!cabinet) throw new Error('Не выбран кабинет (именованный muff_cabs)');
+log('cabinet detect', cabinet);
+
 
     // Текущий режим «Ключи»
     var mode = (function getMode() {
@@ -93,6 +110,7 @@ function sendPricesFromCalculatorFast() {
         'resolved=' + stats.resolved + ', unresolved=' + stats.unresolved +
         ', badPrice=' + stats.badPrice + ', emptyKey=' + stats.emptyKey);
 
+    // ===== OZON =====
     if (PLAT === 'OZ') {
       if (!payloadOZ.length) { ss.toast('OZON: нет валидных строк для отправки', 'Готово', 4); return; }
       log('payload OZ (first 5)', JSON.stringify(payloadOZ.slice(0, 5)));
@@ -108,23 +126,34 @@ function sendPricesFromCalculatorFast() {
       return;
     }
 
-    // ===== WB ветка: берём токен роли "Цены и скидки, Аналитика" и шлём через класс WB =====
+    // ===== WB =====
     if (!payloadWB.length) { ss.toast('WB: нет валидных строк для отправки', 'Готово', 4); return; }
     log('payload WB (first 5)', JSON.stringify(payloadWB.slice(0, 5)));
 
-    var tokenWB = (REF && REF.pickWBToken) ? REF.pickWBToken(cabinet, 'prices', true) : null;
-    if (!tokenWB) throw new Error('WB: не найден токен с ролью "Цены и скидки, Аналитика" для кабинета ' + cabinet);
+var tokenWB = (REF && REF.pickWBToken) ? REF.pickWBToken(cabinet) : null;
+if (!tokenWB) throw new Error('WB: не найден ни один токен с доступом "Цены и скидки" для кабинета ' + cabinet);
 
-    // НЕ логируем токен в консоль!
+
     log('WB token picked', 'role=prices');
 
     try {
       var wbClient = new WB(tokenWB);
       var resWB = wbClient.setPrices(payloadWB, { batchSize: 500 });
-      log('WB setPrices OK', 'sent=' + (resWB && resWB.count || payloadWB.length) + ', tasks=' + ((resWB && resWB.uploadIds && resWB.uploadIds.length) || 0));
-      ss.toast('WB: отправлено цен: ' + (resWB && resWB.count || payloadWB.length) +
-               (resWB && resWB.uploadIds && resWB.uploadIds.length ? (', tasks=' + resWB.uploadIds.join(',')) : ''),
-               'Готово', 7);
+
+      // Подхватим возможные uploadId(ы) из ответа
+      var uploadIds = [];
+      if (resWB) {
+        if (Array.isArray(resWB.uploadIds)) uploadIds = resWB.uploadIds.slice();
+        else if (resWB.data && typeof resWB.data.id !== 'undefined') uploadIds = [resWB.data.id];
+        else if (resWB.id) uploadIds = [resWB.id];
+      }
+
+      log('WB setPrices OK', 'sent=' + payloadWB.length + ', uploadIds=' + JSON.stringify(uploadIds));
+      ss.toast('WB: отправлено цен: ' + payloadWB.length + (uploadIds.length ? (' | uploadId=' + uploadIds.join(',')) : ''), 'Готово', 7);
+
+      // 🔎 Отладка + выгрузка лога в «🛠 Тех. лог» (с H)
+      WB_debugPriceUpload_(tokenWB, uploadIds, payloadWB, cabinet);
+
     } catch (e2) {
       log('WB setPrices FAIL', (e2 && e2.message) ? e2.message : String(e2));
       throw new Error('WB setPrices failed: ' + ((e2 && e2.message) || e2));
@@ -136,7 +165,6 @@ function sendPricesFromCalculatorFast() {
     throw err;
   }
 }
-
 
 /** ====== РЕЗОЛВЕРЫ (по листам артикулов) ====== */
 function buildIdResolverByPlatformCabinet_(PLAT, cabinet) {
@@ -174,11 +202,10 @@ function buildIdResolverByPlatformCabinet_(PLAT, cabinet) {
       var offer = B;
       if (offer) byOffer.set(offer, offer);
 
-      // строка показа для режима «Названия»: (SKU || Артикул) + ' | ' + Наименование
       var disp = ((K || offer) ? (K || offer) : '') + (L ? (' | ' + L) : '');
       disp = disp.trim();
       if (disp) byDisplay.set(disp, { offer_id: offer });
-      if (offer) byDisplay.set(offer, { offer_id: offer }); // дубль на «чистый» артикул
+      if (offer) byDisplay.set(offer, { offer_id: offer });
 
     } else { // WB
       var vendor = B;
@@ -186,12 +213,10 @@ function buildIdResolverByPlatformCabinet_(PLAT, cabinet) {
       if (vendor && nmID) byVendor.set(vendor, nmID);
       if (nmID) byNm.set(nmID, nmID);
 
-      // строка показа для режима «Названия»: nmID + ' | ' + Наименование
       var dispWB = (nmID ? nmID : '') + (L ? (' | ' + L) : '');
       dispWB = dispWB.trim();
       if (dispWB && nmID) byDisplay.set(dispWB, { nmID: nmID });
 
-      // и «чистые» ключи
       if (vendor && nmID) byDisplay.set(vendor, { nmID: nmID });
       if (nmID) byDisplay.set(nmID, { nmID: nmID });
     }
@@ -208,10 +233,8 @@ function buildIdResolverByPlatformCabinet_(PLAT, cabinet) {
 }
 
 function resolveOzonOfferId_(keyDisp, mode, R) {
-  // Если режим «Артикулы» — принимаем G как offer_id; иначе пробуем карту byDisplay
   var off = String(keyDisp || '').trim();
   if (mode === 'Артикулы') {
-    // На OZ offer_id = «Артикул» (колонка B выгрузки). Доверяем «Калькулятору».
     if (off) return off;
   }
   var rec = R.byDisplay.get(off);
@@ -222,7 +245,6 @@ function resolveOzonOfferId_(keyDisp, mode, R) {
 function resolveWbNmId_(keyDisp, mode, R) {
   var s = String(keyDisp || '').trim();
   if (mode === 'Названия') {
-    // G = «nmID | Наименование» — пробуем карту, затем парсим левую часть до «|»
     var rec = R.byDisplay.get(s);
     if (rec && rec.nmID) return rec.nmID;
 
@@ -230,9 +252,296 @@ function resolveWbNmId_(keyDisp, mode, R) {
     if (R.byNm.has(left)) return left;
     return '';
   } else {
-    // «Артикулы» (для WB это «Артикул продавца») — ищем в byVendor; иногда G уже nmID
     if (R.byVendor.has(s)) return R.byVendor.get(s);
     if (R.byNm.has(s))     return s;
     return '';
+  }
+}
+
+/* =========================================================
+ * ========= WB DEBUG + ВЫГРУЗКА ЛОГА В «🛠 Тех. лог» =======
+ * ========================================================= */
+
+/**
+ * Собирает развернутый лог по загрузке цен WB и выгружает в лист «🛠 Тех. лог» с колонки H.
+ * - Очищает область H:… по числу колонок таблицы (все строки листа), ставит заголовки в 1-й строке.
+ * - Данные пишет со 2-й строки.
+ * - На каждую позицию (nmID) одна строка с контекстом uploadID и статусом.
+ *
+ * @param {string} token       WB токен (роль «Цены и скидки, Аналитика»)
+ * @param {number[]} uploadIds Идентификаторы загрузки (массив, может быть пустым)
+ * @param {{nmID:number, price:number, discount:number}[]} payloadWB — то, что отправляли
+ * @param {string=} cabinet    Опционально — имя кабинета (для наглядности в логе)
+ */
+function WB_debugPriceUpload_(token, uploadIds, payloadWB, cabinet) {
+  var LOG_NS = 'WB_DEBUG';
+  function clog(label, extra) {
+    console.log('[' + LOG_NS + '] ' + label + (extra ? ' | ' + extra : ''));
+  }
+
+  if (!token) { clog('skip', 'no token'); return; }
+
+  // === 0) Базовые коллекции ===
+  var now = new Date();
+  var plat = 'WB';
+  var allNmIDs = [];
+  try {
+    var seen = new Set();
+    for (var i = 0; i < payloadWB.length; i++) {
+      var n = Number(payloadWB[i] && payloadWB[i].nmID);
+      if (n && !seen.has(n)) { seen.add(n); allNmIDs.push(n); }
+    }
+  } catch (_) {}
+  clog('nmIDs collected', 'count=' + allNmIDs.length);
+
+  // Карта по nmID с будущими полями (заполняем постепенно)
+  var recMap = {}; // nmID -> {ts, plat, cabinet, uploadID, status, nmID, error, quarantine, price, discount, discountedPrice, clubDiscountedPrice}
+  function ensureRec(nm, upId, statusStr) {
+    if (!recMap[nm]) recMap[nm] = {
+      ts: now, plat: plat, cabinet: cabinet || '',
+      uploadID: (upId || ''), status: (statusStr || ''),
+      nmID: nm, error: '', quarantine: '',
+      price: '', discount: '', discountedPrice: '', clubDiscountedPrice: ''
+    };
+    if (upId && !recMap[nm].uploadID) recMap[nm].uploadID = upId;
+    if (statusStr && !recMap[nm].status) recMap[nm].status = statusStr;
+    return recMap[nm];
+  }
+
+  // === 1) Если есть uploadIds — проверим статусы и вытащим детализацию ===
+  var hasUploads = Array.isArray(uploadIds) && uploadIds.length > 0;
+  if (hasUploads) {
+    var statusName = function(n){ // для history/tasks
+      switch(Number(n)){ case 3: return 'processed'; case 5: return 'partial'; case 6: return 'errors'; default: return String(n); }
+    };
+    for (var u = 0; u < uploadIds.length; u++) {
+      var upId = Number(uploadIds[u]);
+      if (!upId) continue;
+
+      var statusStr = '';
+      // До 10 попыток, интервал ~1.2s
+      for (var attempt = 1; attempt <= 10; attempt++) {
+        var history = WB_get_(token, 'https://discounts-prices-api.wildberries.ru/api/v2/history/tasks?uploadID=' + upId, 'history/tasks');
+        if (history && history.data && typeof history.data.status !== 'undefined') {
+          statusStr = statusName(history.data.status);
+          clog('history state', 'uploadID=' + upId + ', status=' + statusStr);
+          if (['processed','partial','errors'].indexOf(statusStr) >= 0) break;
+        } else {
+          clog('history state', 'no data for uploadID=' + upId);
+        }
+
+        var buffer = WB_get_(token, 'https://discounts-prices-api.wildberries.ru/api/v2/buffer/tasks?uploadID=' + upId, 'buffer/tasks');
+        if (buffer && buffer.data && typeof buffer.data.status !== 'undefined') {
+          var bst = Number(buffer.data.status); // 1=in progress
+          if (bst === 1) { statusStr = 'in_progress'; clog('buffer state', 'uploadID=' + upId + ', status=1'); }
+          else { clog('buffer state', 'uploadID=' + upId + ', status=' + bst); }
+          if (bst !== 1) break;
+        }
+
+        Utilities.sleep(1200);
+      }
+
+      // Детали (history первичен; если нет — buffer)
+      var details = WB_get_(token,
+        'https://discounts-prices-api.wildberries.ru/api/v2/history/goods/task?uploadID=' + upId + '&limit=1000&offset=0',
+        'history/goods/task');
+      if (!(details && details.data && Array.isArray(details.data.listGoods))) {
+        details = WB_get_(token,
+          'https://discounts-prices-api.wildberries.ru/api/v2/buffer/goods/task?uploadID=' + upId + '&limit=1000&offset=0',
+          'buffer/goods/task');
+      }
+
+      if (details && details.data && Array.isArray(details.data.listGoods)) {
+        details.data.listGoods.forEach(function(g){
+          var nm = Number(g && g.nmID);
+          if (!nm) return;
+          var err = String((g.errorText || g.error || '')).trim();
+          var R = ensureRec(nm, upId, statusStr || '');
+          if (err) R.error = err;
+        });
+      }
+
+      // Если в деталях ничего не было — всё равно положим строки по исходному списку nmID
+      if ((!details || !details.data || !Array.isArray(details.data.listGoods)) && allNmIDs.length) {
+        allNmIDs.forEach(function(nm){
+          ensureRec(nm, upId, statusStr || '');
+        });
+      }
+    }
+  } else {
+    // Без uploadID: ведём строки по исходному набору nmID
+    allNmIDs.forEach(function(nm){ ensureRec(nm, '', 'no_upload'); });
+  }
+
+  // Если вообще ничего не собралось — защитно выведем хотя бы «пустышки»
+  if (!Object.keys(recMap).length && allNmIDs.length) {
+    allNmIDs.forEach(function(nm){ ensureRec(nm, '', 'no_upload'); });
+  }
+
+  // === 2) Карантин и текущие цены ===
+  var nmList = Object.keys(recMap).map(function(k){ return Number(k); });
+  if (nmList.length) {
+    var quarantineMap = WB_fetchQuarantine_(token, nmList);
+    var pricesMap     = WB_fetchPrices_(token, nmList);
+    nmList.forEach(function(nm){
+      var R = recMap[nm];
+      if (!R) return;
+      if (quarantineMap[nm]) R.quarantine = quarantineMap[nm];
+      if (pricesMap[nm]) {
+        R.price = pricesMap[nm].price;
+        R.discount = pricesMap[nm].discount;
+        if (typeof pricesMap[nm].discountedPrice !== 'undefined') R.discountedPrice = pricesMap[nm].discountedPrice;
+        if (typeof pricesMap[nm].clubDiscountedPrice !== 'undefined') R.clubDiscountedPrice = pricesMap[nm].clubDiscountedPrice;
+      }
+    });
+  }
+
+  // === 3) Выгрузка в «🛠 Тех. лог» с H ===
+  var HEAD = [
+    'Время', 'Площадка', 'Кабинет', 'UploadID', 'Статус',
+    'nmID', 'Ошибка', 'Карантин',
+    'Текущая цена', 'Скидка', 'Цена со скидкой', 'Клубная цена'
+  ];
+
+  var rows = Object.keys(recMap).sort(function(a,b){ return Number(a)-Number(b); }).map(function(k){
+    var r = recMap[k];
+    return [
+      r.ts, r.plat, r.cabinet, r.uploadID, r.status,
+      r.nmID, r.error, r.quarantine,
+      r.price, r.discount, r.discountedPrice, r.clubDiscountedPrice
+    ];
+  });
+
+  WB_writeTechLogWB_(HEAD, rows);
+  clog('written to sheet', 'rows=' + rows.length);
+}
+
+/** ===== Низкоуровневые вызовы WB (не логируем токен!) ===== */
+function WB_post_(token, url, bodyObj, tag) {
+  var resp, code, txt;
+  try {
+    resp = UrlFetchApp.fetch(url, {
+      method: 'post',
+      payload: JSON.stringify(bodyObj || {}),
+      contentType: 'application/json',
+      headers: { 'Authorization': token },
+      muteHttpExceptions: true
+    });
+    code = resp.getResponseCode();
+    txt  = resp.getContentText() || '';
+  } catch (e) {
+    console.log('[WB_POST][' + (tag||'') + '] ' + url + ' | EXC: ' + (e && e.message || e));
+    return null;
+  }
+  var trimmed = txt.length > 2000 ? (txt.slice(0, 2000) + '…') : txt;
+  console.log('[WB_POST][' + (tag||'') + '] ' + url + ' | code=' + code + ' | body=' + trimmed);
+  if (code >= 200 && code < 300) {
+    try { return JSON.parse(txt); } catch (_) { return { raw: txt }; }
+  }
+  return null;
+}
+
+function WB_get_(token, url, tag) {
+  var resp, code, txt;
+  try {
+    resp = UrlFetchApp.fetch(url, {
+      method: 'get',
+      contentType: 'application/json',
+      headers: { 'Authorization': token },
+      muteHttpExceptions: true
+    });
+    code = resp.getResponseCode();
+    txt  = resp.getContentText() || '';
+  } catch (e) {
+    console.log('[WB_GET][' + (tag||'') + '] ' + url + ' | EXC: ' + (e && e.message || e));
+    return null;
+  }
+  var trimmed = txt.length > 2000 ? (txt.slice(0, 2000) + '…') : txt;
+  console.log('[WB_GET][' + (tag||'') + '] ' + url + ' | code=' + code + ' | body=' + trimmed);
+  if (code >= 200 && code < 300) {
+    try { return JSON.parse(txt); } catch (_) { return { raw: txt }; }
+  }
+  return null;
+}
+
+/** Возвращает Map nmID->reason для карантина цен */
+function WB_fetchQuarantine_(token, nmIDs) {
+  var out = {};
+  if (!nmIDs || !nmIDs.length) return out;
+
+  for (var i = 0; i < nmIDs.length; i += 1000) {
+    var chunk = nmIDs.slice(i, i + 1000);
+    var res = WB_post_(token,
+      'https://discounts-prices-api.wildberries.ru/api/v2/quarantine/goods',
+      { nmIDs: chunk }, 'quarantine/goods');
+    if (res && res.data && Array.isArray(res.data.listGoods)) {
+      res.data.listGoods.forEach(function(g){
+        var nm = Number(g && g.nmID);
+        if (!nm) return;
+        var reason = String(g.reason || g.error || '').trim();
+        if (reason) out[nm] = reason;
+      });
+    }
+  }
+  return out;
+}
+
+/** Возвращает Map nmID->{price, discount, discountedPrice?, clubDiscountedPrice?} */
+function WB_fetchPrices_(token, nmIDs) {
+  var out = {};
+  if (!nmIDs || !nmIDs.length) return out;
+
+  for (var i = 0; i < nmIDs.length; i += 1000) {
+    var chunk = nmIDs.slice(i, i + 1000);
+    var res = WB_post_(token,
+      'https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter',
+      { nmIDs: chunk }, 'list/goods/filter');
+    if (res && res.data && Array.isArray(res.data.listGoods)) {
+      res.data.listGoods.forEach(function(g){
+        var nm = Number(g && g.nmID);
+        if (!nm) return;
+        out[nm] = {
+          price: g.price,
+          discount: g.discount,
+          discountedPrice: g.discountedPrice,
+          clubDiscountedPrice: g.clubDiscountedPrice
+        };
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Запись таблицы лога в лист «🛠 Тех. лог» с колонки H.
+ * Перед записью: очищаем область H:… (все строки листа, по ширине заголовков),
+ * затем пишем заголовки в 1-й строке и данные со 2-й.
+ */
+function WB_writeTechLogWB_(HEAD, rows) {
+  var ss = SpreadsheetApp.getActive();
+  var name = '🛠 Тех. лог';
+  var sh = ss.getSheetByName(name) || ss.insertSheet(name);
+
+  var startCol = 8; // H
+  var width = HEAD.length;
+
+  // Очистка области вставки по всей высоте листа (только контент)
+  var maxRows = sh.getMaxRows();
+  sh.getRange(1, startCol, maxRows, width).clearContent();
+
+  // Заголовки (1-я строка)
+  sh.getRange(1, startCol, 1, width).setValues([HEAD]).setFontWeight('bold');
+
+  // Данные (со 2-й строки)
+  if (rows && rows.length) {
+    sh.getRange(2, startCol, rows.length, width).setValues(rows);
+  }
+
+  // Формат времени
+  sh.getRange(2, startCol, Math.max(1, rows.length), 1).setNumberFormat('dd.mm.yyyy HH:mm:ss');
+
+  // Авто-ширина для зоны лога
+  for (var c = 0; c < width; c++) {
+    sh.autoResizeColumn(startCol + c);
   }
 }

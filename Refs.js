@@ -320,6 +320,48 @@ REF.getCurrentPlatform = function () {
     return out;
   };
 
+
+/** Подбор токена WB по кабинету с доступом к "Цены и скидки".
+ *  - Читает «⚙️ Параметры» A:H
+ *  - Фильтр: D = Wildberries (любой регистр/вариант), A = cabinet
+ *  - В B: роли через запятую, берём токен из C, если B содержит "цен" или "скид"
+ *  - Порядок перечисления ролей не важен.
+ *  - Возвращает первый подходящий токен, иначе null.
+ */
+REF.pickWBToken = function (cabinet, opts) {
+  opts = opts || {};
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(REF.PARAMS.SHEET);
+  if (!sh) return null;
+
+  var last = sh.getLastRow();
+  if (last < 2) return null;
+
+  var S = REF.PARAMS.SCHEMA; // { CAB:1, ID:2, KEY:3, MP:4, SHORT:5, TAX:6, COLOR:7, PICK:8 }
+  var vals = sh.getRange(2, 1, last - 1, S.PICK).getDisplayValues(); // A:H (display)
+  var wantCab = REF.normCabinet(cabinet);
+
+  var chosen = null;
+  for (var i = 0; i < vals.length; i++) {
+    var cab  = REF.normCabinet(vals[i][S.CAB - 1] || '');
+    var roles= String(vals[i][S.ID  - 1] || '');
+    var key  = String(vals[i][S.KEY - 1] || '').trim();
+    var mp   = REF.platformCanon(vals[i][S.MP  - 1] || '');
+
+    if (!key || cab !== wantCab || mp !== 'WB') continue;
+
+    // Роли устойчиво парсим по вхождению "цен" или "скид" (без привязки к порядку слов)
+    if (/цен|скид/i.test(roles)) {
+      chosen = key;
+      break; // берём первый подходящий
+    }
+  }
+  return chosen;
+};
+
+
+
+
   /** Отмеченные кабинеты по платформе (H=TRUE) */
   REF.readSelectedCabinets = function (mpTag /* 'OZON'|'WILDBERRIES' */) {
     var ss = SpreadsheetApp.getActive();
