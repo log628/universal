@@ -1,6 +1,8 @@
 /** =========================================================
  * Универсальная отправка цен из «⚖️ Калькулятор» в включённую площадку (⚙️ Параметры!I2)
- * + Подробный WB-лог со статусами/ошибками/карантином в лист «🛠 Тех. лог» (с H)
+ * + Полный WB-лог со статусами/ошибками/карантином/OK? в лист «🛠 Тех. лог» (с H)
+ * + Учитывает size-pricing на WB (editableSizePrice: true → upload/task/size)
+ * + Пишет в лог Артикул продавца (vendorCode) и блокировки Sale/остатки
  * ========================================================= */
 function sendPricesFromCalculatorFast() {
   var T0 = Date.now();
@@ -15,29 +17,27 @@ function sendPricesFromCalculatorFast() {
     var shPar  = ss.getSheetByName('⚙️ Параметры');
     if (!shCalc || !shPar) throw new Error('Не найден «⚖️ Калькулятор» или «⚙️ Параметры»');
 
-    // Площадка строго из I2
-// === Площадка ТОЛЬКО из именованного muff_mp (REF.NAMED.MP_CTRL)
-var rMP   = (REF && REF.NAMED && REF.NAMED.MP_CTRL) ? ss.getRangeByName(REF.NAMED.MP_CTRL) : null;
-var mpRaw = rMP ? String(rMP.getDisplayValue() || '').trim() : '';
-var PLAT  = (function (s) {
-  if (REF && typeof REF.platformCanon === 'function') {
-    var c = REF.platformCanon(s);            // 'OZ' | 'WB' | null
-    if (c) return c;
-  }
-  if (/wb|wildberries/i.test(s)) return 'WB'; // мягкая догадка
-  if (/^oz|ozon/i.test(s))       return 'OZ';
-  return null;
-})(mpRaw);
-if (!PLAT) throw new Error('Не распознана площадка в именованном диапазоне muff_mp. Значение: "' + mpRaw + '"');
-log('platform detect', 'muff_mp="' + mpRaw + '" -> ' + PLAT);
+    // === Площадка ТОЛЬКО из именованного muff_mp (REF.NAMED.MP_CTRL)
+    var rMP   = (REF && REF.NAMED && REF.NAMED.MP_CTRL) ? ss.getRangeByName(REF.NAMED.MP_CTRL) : null;
+    var mpRaw = rMP ? String(rMP.getDisplayValue() || '').trim() : '';
+    var PLAT  = (function (s) {
+      if (REF && typeof REF.platformCanon === 'function') {
+        var c = REF.platformCanon(s);            // 'OZ' | 'WB' | null
+        if (c) return c;
+      }
+      if (/wb|wildberries/i.test(s)) return 'WB';
+      if (/^oz|ozon/i.test(s))       return 'OZ';
+      return null;
+    })(mpRaw);
+    if (!PLAT) throw new Error('Не распознана площадка в именованном диапазоне muff_mp. Значение: "' + mpRaw + '"');
+    log('platform detect', 'muff_mp="' + mpRaw + '" -> ' + PLAT);
 
-// === Кабинет ТОЛЬКО из именованного muff_cabs
-var cabinet = (REF && typeof REF.getCabinetControlValue === 'function') ? REF.getCabinetControlValue() : '';
-if (!cabinet) throw new Error('Не выбран кабинет (именованный muff_cabs)');
-log('cabinet detect', cabinet);
+    // === Кабинет ТОЛЬКО из именованного muff_cabs
+    var cabinet = (REF && typeof REF.getCabinetControlValue === 'function') ? REF.getCabinetControlValue() : '';
+    if (!cabinet) throw new Error('Не выбран кабинет (именованный muff_cabs)');
+    log('cabinet detect', cabinet);
 
-
-    // Текущий режим «Ключи»
+    // === Текущий режим «Ключи»
     var mode = (function getMode() {
       var lastRow = shPar.getLastRow(), lastCol = shPar.getLastColumn();
       if (lastRow < 2 || lastCol < 11) return 'Артикулы';
@@ -56,13 +56,14 @@ log('cabinet detect', cabinet);
 
     log('START', 'platform=' + PLAT + ', cabinet=' + cabinet + ', mode=' + mode);
 
-    // РЕЗОЛВЕР: читаем лист артикулов площадки и строим map’ы по текущему кабинету
+    // === РЕЗОЛВЕР: лист артикулов площадки → словари по кабинету (добавлен nm→vendor)
     var resolver = buildIdResolverByPlatformCabinet_(PLAT, cabinet);
     log('resolver built',
         'byDisplay=' + resolver.byDisplay.size + ', byVendor=' + resolver.byVendor.size +
-        ', byOffer=' + resolver.byOffer.size + ', byNm=' + resolver.byNm.size);
+        ', byOffer=' + resolver.byOffer.size + ', byNm=' + resolver.byNm.size +
+        (resolver.nmToVendor ? (', nmToVendor=' + resolver.nmToVendor.size) : ''));
 
-    // Собираем G/H до последней непустой G
+    // === Собираем G/H до последней непустой G
     var lastCalcRow = shCalc.getLastRow();
     var gVals = shCalc.getRange(4, 7, Math.max(lastCalcRow - 3, 1), 1).getDisplayValues(); // G4:G
     var hVals = shCalc.getRange(4, 8, Math.max(lastCalcRow - 3, 1), 1).getValues();        // H4:H
@@ -95,10 +96,10 @@ log('cabinet detect', cabinet);
         } else {
           stats.unresolved++;
         }
-      } else {
+      } else { // WB
         var nm = resolveWbNmId_(keyDisp, mode, resolver);
         if (nm) {
-          payloadWB.push({ nmID: Number(nm), price: Math.round(Number(price)), discount: 0 });
+          payloadWB.push({ nmID: Number(nm), price: Math.round(Number(price)) }); // discount опускаем
           stats.resolved++;
         } else {
           stats.unresolved++;
@@ -106,8 +107,7 @@ log('cabinet detect', cabinet);
       }
     }
 
-    log('collect done',
-        'resolved=' + stats.resolved + ', unresolved=' + stats.unresolved +
+    log('collect done', 'resolved=' + stats.resolved + ', unresolved=' + stats.unresolved +
         ', badPrice=' + stats.badPrice + ', emptyKey=' + stats.emptyKey);
 
     // ===== OZON =====
@@ -130,34 +130,58 @@ log('cabinet detect', cabinet);
     if (!payloadWB.length) { ss.toast('WB: нет валидных строк для отправки', 'Готово', 4); return; }
     log('payload WB (first 5)', JSON.stringify(payloadWB.slice(0, 5)));
 
-var tokenWB = (REF && REF.pickWBToken) ? REF.pickWBToken(cabinet) : null;
-if (!tokenWB) throw new Error('WB: не найден ни один токен с доступом "Цены и скидки" для кабинета ' + cabinet);
-
+    var tokenWB = (REF && REF.pickWBToken) ? REF.pickWBToken(cabinet) : null;
+    if (!tokenWB) throw new Error('WB: не найден ни один токен с доступом "Цены и скидки" для кабинета ' + cabinet);
 
     log('WB token picked', 'role=prices');
 
-    try {
-      var wbClient = new WB(tokenWB);
-      var resWB = wbClient.setPrices(payloadWB, { batchSize: 500 });
+    // 1) Получим актуальную информацию по товарам → решаем, где size-pricing
+    var nmList = payloadWB.map(function(x){ return Number(x.nmID); });
+    var infoMap = WB_fetchProductsInfo_(tokenWB, nmList); // nmID -> {vendorCode, sizes[], editableSizePrice, price, discount, isBadTurnover}
 
-      // Подхватим возможные uploadId(ы) из ответа
-      var uploadIds = [];
-      if (resWB) {
-        if (Array.isArray(resWB.uploadIds)) uploadIds = resWB.uploadIds.slice();
-        else if (resWB.data && typeof resWB.data.id !== 'undefined') uploadIds = [resWB.data.id];
-        else if (resWB.id) uploadIds = [resWB.id];
+    var sizeData = [];      // [{nmID, sizeID, price}]
+    var productData = [];   // [{nmID, price}]
+    var nmMode = {};        // nmID -> 'size' | 'product'
+
+    nmList.forEach(function(nm){
+      var inf = infoMap[nm];
+      if (inf && inf.editableSizePrice && Array.isArray(inf.sizes) && inf.sizes.length) {
+        var p = payloadWB.find(function(x){ return Number(x.nmID) === nm; }).price;
+        inf.sizes.forEach(function(sz){ if (sz && typeof sz.sizeID !== 'undefined') sizeData.push({ nmID: nm, sizeID: Number(sz.sizeID), price: p }); });
+        nmMode[nm] = 'size';
+      } else {
+        var p2 = payloadWB.find(function(x){ return Number(x.nmID) === nm; }).price;
+        productData.push({ nmID: nm, price: p2 });
+        nmMode[nm] = 'product';
       }
+    });
 
-      log('WB setPrices OK', 'sent=' + payloadWB.length + ', uploadIds=' + JSON.stringify(uploadIds));
-      ss.toast('WB: отправлено цен: ' + payloadWB.length + (uploadIds.length ? (' | uploadId=' + uploadIds.join(',')) : ''), 'Готово', 7);
-
-      // 🔎 Отладка + выгрузка лога в «🛠 Тех. лог» (с H)
-      WB_debugPriceUpload_(tokenWB, uploadIds, payloadWB, cabinet);
-
-    } catch (e2) {
-      log('WB setPrices FAIL', (e2 && e2.message) ? e2.message : String(e2));
-      throw new Error('WB setPrices failed: ' + ((e2 && e2.message) || e2));
+    // 2) Отправка: товары и размеры отдельными задачами (чанк по лимитам)
+    var uploadIds = [];
+    if (productData.length) {
+      var chunksP = chunk_(productData, 1000);
+      for (var cp = 0; cp < chunksP.length; cp++) {
+        var rP = WB_post_(tokenWB, 'https://discounts-prices-api.wildberries.ru/api/v2/upload/task', { data: chunksP[cp] }, 'upload/task');
+        var idP = (rP && rP.data && typeof rP.data.id !== 'undefined') ? Number(rP.data.id) : null;
+        if (idP) uploadIds.push(idP);
+        Utilities.sleep(650);
+      }
     }
+    if (sizeData.length) {
+      var chunksS = chunk_(sizeData, 1000);
+      for (var cs = 0; cs < chunksS.length; cs++) {
+        var rS = WB_post_(tokenWB, 'https://discounts-prices-api.wildberries.ru/api/v2/upload/task/size', { data: chunksS[cs] }, 'upload/task/size');
+        var idS = (rS && rS.data && typeof rS.data.id !== 'undefined') ? Number(rS.data.id) : null;
+        if (idS) uploadIds.push(idS);
+        Utilities.sleep(650);
+      }
+    }
+
+    log('WB uploads', 'sent products=' + productData.length + ', sizes=' + sizeData.length + ', uploadIds=' + JSON.stringify(uploadIds));
+    ss.toast('WB: отправлено цен: ' + payloadWB.length + (uploadIds.length ? (' | uploadId=' + uploadIds.join(',')) : ''), 'Готово', 7);
+
+    // 3) Подробный лог в «🛠 Тех. лог» (size-pricing + vendorCode + OK? + блокировки)
+    WB_debugPriceUpload_(tokenWB, uploadIds, payloadWB, cabinet, { nmMode: nmMode });
 
   } catch (err) {
     console.log('[sendPricesFromCalculatorFast] ERROR: ' + ((err && err.stack) || (err && err.message) || String(err)));
@@ -177,16 +201,17 @@ function buildIdResolverByPlatformCabinet_(PLAT, cabinet) {
 
   var ss = SpreadsheetApp.getActive();
   var artsSheet = ss.getSheetByName(PLAT === 'WB' ? REF.SHEETS.ARTS_WB : REF.SHEETS.ARTS_OZ);
-  if (!artsSheet) { log('no sheet'); return { byDisplay: new Map(), byVendor: new Map(), byOffer: new Map(), byNm: new Map() }; }
+  if (!artsSheet) { log('no sheet'); return { byDisplay: new Map(), byVendor: new Map(), byOffer: new Map(), byNm: new Map(), nmToVendor: new Map() }; }
 
   var lastRow = artsSheet.getLastRow();
-  if (lastRow < 2) { log('no data rows'); return { byDisplay: new Map(), byVendor: new Map(), byOffer: new Map(), byNm: new Map() }; }
+  if (lastRow < 2) { log('no data rows'); return { byDisplay: new Map(), byVendor: new Map(), byOffer: new Map(), byNm: new Map(), nmToVendor: new Map() }; }
 
   var vals = artsSheet.getRange(2, 1, lastRow - 1, 12).getDisplayValues(); // A:L
-  var byDisplay = new Map(); // строка показа «как в калькуляторе» -> {offer_id?, nmID?}
-  var byVendor  = new Map(); // vendorCode (WB B) -> nmID
-  var byOffer   = new Map(); // offer_id (OZ B) -> offer_id
-  var byNm      = new Map(); // nmID (WB K) -> nmID
+  var byDisplay = new Map();
+  var byVendor  = new Map();
+  var byOffer   = new Map();
+  var byNm      = new Map();
+  var nmToVendor= new Map();
 
   var rowsSeen = 0;
   vals.forEach(function (row) {
@@ -194,14 +219,13 @@ function buildIdResolverByPlatformCabinet_(PLAT, cabinet) {
     if (cab !== cabinet) return;
     rowsSeen++;
 
-    var B = String(row[1] || '').trim();   // OZ: Артикул(offer_id) | WB: Артикул продавца(vendor)
-    var K = String(row[10] || '').trim();  // OZ: SKU              | WB: nmID
+    var B = String(row[1] || '').trim();   // OZ: offer_id | WB: vendorCode
+    var K = String(row[10] || '').trim();  // OZ: SKU      | WB: nmID
     var L = String(row[11] || '').trim();  // Наименование
 
     if (PLAT === 'OZ') {
       var offer = B;
       if (offer) byOffer.set(offer, offer);
-
       var disp = ((K || offer) ? (K || offer) : '') + (L ? (' | ' + L) : '');
       disp = disp.trim();
       if (disp) byDisplay.set(disp, { offer_id: offer });
@@ -211,25 +235,20 @@ function buildIdResolverByPlatformCabinet_(PLAT, cabinet) {
       var vendor = B;
       var nmID   = K;
       if (vendor && nmID) byVendor.set(vendor, nmID);
-      if (nmID) byNm.set(nmID, nmID);
+      if (nmID) { byNm.set(nmID, nmID); }
+      if (vendor && nmID) nmToVendor.set(nmID, vendor);
 
       var dispWB = (nmID ? nmID : '') + (L ? (' | ' + L) : '');
       dispWB = dispWB.trim();
       if (dispWB && nmID) byDisplay.set(dispWB, { nmID: nmID });
-
       if (vendor && nmID) byDisplay.set(vendor, { nmID: nmID });
       if (nmID) byDisplay.set(nmID, { nmID: nmID });
     }
   });
 
-  log('built',
-      'rowsSeen=' + rowsSeen +
-      ', byDisplay=' + byDisplay.size +
-      ', byVendor=' + byVendor.size +
-      ', byOffer='  + byOffer.size  +
-      ', byNm='     + byNm.size);
+  log('built', 'rowsSeen=' + rowsSeen + ', byDisplay=' + byDisplay.size + ', byVendor=' + byVendor.size + ', byOffer='  + byOffer.size  + ', byNm=' + byNm.size + ', nmToVendor=' + nmToVendor.size);
 
-  return { byDisplay: byDisplay, byVendor: byVendor, byOffer: byOffer, byNm: byNm };
+  return { byDisplay: byDisplay, byVendor: byVendor, byOffer: byOffer, byNm: byNm, nmToVendor: nmToVendor };
 }
 
 function resolveOzonOfferId_(keyDisp, mode, R) {
@@ -247,7 +266,6 @@ function resolveWbNmId_(keyDisp, mode, R) {
   if (mode === 'Названия') {
     var rec = R.byDisplay.get(s);
     if (rec && rec.nmID) return rec.nmID;
-
     var left = s.split('|')[0].trim();
     if (R.byNm.has(left)) return left;
     return '';
@@ -259,25 +277,24 @@ function resolveWbNmId_(keyDisp, mode, R) {
 }
 
 /* =========================================================
- * ========= WB DEBUG + ВЫГРУЗКА ЛОГА В «🛠 Тех. лог» =======
+ * ======= WB DEBUG + ВЫГРУЗКА ЛОГА В «🛠 Тех. лог» (H) ======
  * ========================================================= */
 
 /**
- * Собирает развернутый лог по загрузке цен WB и выгружает в лист «🛠 Тех. лог» с колонки H.
- * - Очищает область H:… по числу колонок таблицы (все строки листа), ставит заголовки в 1-й строке.
- * - Данные пишет со 2-й строки.
- * - На каждую позицию (nmID) одна строка с контекстом uploadID и статусом.
- *
- * @param {string} token       WB токен (роль «Цены и скидки, Аналитика»)
- * @param {number[]} uploadIds Идентификаторы загрузки (массив, может быть пустым)
- * @param {{nmID:number, price:number, discount:number}[]} payloadWB — то, что отправляли
- * @param {string=} cabinet    Опционально — имя кабинета (для наглядности в логе)
+ * Подробный лог по загрузке цен WB и выгрузка в «🛠 Тех. лог» (с колонки H).
+ * — Статусы по uploadID (history/buffer)
+ * — Ошибки по товарам
+ * — Карантин (GET /quarantine/goods)
+ * — Текущие цены/скидки (POST /list/goods/filter)
+ * — VendorCode (Артикул продавца)
+ * — Сравнение с отправленной ценой: Δ и OK?
+ * — Режим ценообразования: product | size
+ * — Фиксация блокировок распродажи (Sale / high inventory) и флага isBadTurnover
  */
-function WB_debugPriceUpload_(token, uploadIds, payloadWB, cabinet) {
+function WB_debugPriceUpload_(token, uploadIds, payloadWB, cabinet, opts) {
   var LOG_NS = 'WB_DEBUG';
-  function clog(label, extra) {
-    console.log('[' + LOG_NS + '] ' + label + (extra ? ' | ' + extra : ''));
-  }
+  function clog(label, extra) { console.log('[' + LOG_NS + '] ' + label + (extra ? ' | ' + extra : '')); }
+  opts = opts || {};
 
   if (!token) { clog('skip', 'no token'); return; }
 
@@ -294,42 +311,50 @@ function WB_debugPriceUpload_(token, uploadIds, payloadWB, cabinet) {
   } catch (_) {}
   clog('nmIDs collected', 'count=' + allNmIDs.length);
 
-  // Карта по nmID с будущими полями (заполняем постепенно)
-  var recMap = {}; // nmID -> {ts, plat, cabinet, uploadID, status, nmID, error, quarantine, price, discount, discountedPrice, clubDiscountedPrice}
+  // nm→отправленная цена + режим (если есть)
+  var sentPrice = {}; // nm -> price
+  var nmMode    = opts.nmMode || {}; // nm -> 'size' | 'product'
+  payloadWB.forEach(function(p){ var n = Number(p.nmID); if (n) sentPrice[n] = Number(p.price); });
+
+  // Строки лога по nmID (заполняем постепенно). Сразу создаём записи для ВСЕХ nmID.
+  var recMap = {}; // nmID -> {...}
   function ensureRec(nm, upId, statusStr) {
     if (!recMap[nm]) recMap[nm] = {
       ts: now, plat: plat, cabinet: cabinet || '',
       uploadID: (upId || ''), status: (statusStr || ''),
-      nmID: nm, error: '', quarantine: '',
-      price: '', discount: '', discountedPrice: '', clubDiscountedPrice: ''
+      nmID: nm, vendor: '', error: '', quarantine: '',
+      price: '', discount: '', discountedPrice: '', clubDiscountedPrice: '',
+      sentPrice: (typeof sentPrice[nm] !== 'undefined') ? sentPrice[nm] : '',
+      delta: '', equal: '', mode: (nmMode[nm] || ''),
+      badTurnover: '', block: '',
+      result: '', reason: ''
     };
     if (upId && !recMap[nm].uploadID) recMap[nm].uploadID = upId;
     if (statusStr && !recMap[nm].status) recMap[nm].status = statusStr;
     return recMap[nm];
   }
 
-  // === 1) Если есть uploadIds — проверим статусы и вытащим детализацию ===
+  // Предзаполнение ВСЕХ отправленных nmID
   var hasUploads = Array.isArray(uploadIds) && uploadIds.length > 0;
+  var preStatus = hasUploads ? 'sent' : 'no_upload (runtime)';
+  var preUploadId = hasUploads ? String(uploadIds[0] || '') : '';
+  allNmIDs.forEach(function(nm){ ensureRec(nm, preUploadId, preStatus); });
+
+  // === 1) uploadIds → статусы и ошибки ===
   if (hasUploads) {
-    var statusName = function(n){ // для history/tasks
-      switch(Number(n)){ case 3: return 'processed'; case 5: return 'partial'; case 6: return 'errors'; default: return String(n); }
-    };
+    var statusName = function(n){ switch(Number(n)){ case 3: return 'processed'; case 5: return 'partial'; case 6: return 'errors'; case 4: return 'canceled'; default: return String(n); } };
     for (var u = 0; u < uploadIds.length; u++) {
       var upId = Number(uploadIds[u]);
       if (!upId) continue;
 
       var statusStr = '';
-      // До 10 попыток, интервал ~1.2s
       for (var attempt = 1; attempt <= 10; attempt++) {
         var history = WB_get_(token, 'https://discounts-prices-api.wildberries.ru/api/v2/history/tasks?uploadID=' + upId, 'history/tasks');
         if (history && history.data && typeof history.data.status !== 'undefined') {
           statusStr = statusName(history.data.status);
           clog('history state', 'uploadID=' + upId + ', status=' + statusStr);
-          if (['processed','partial','errors'].indexOf(statusStr) >= 0) break;
-        } else {
-          clog('history state', 'no data for uploadID=' + upId);
+          if (['processed','partial','errors','canceled'].indexOf(statusStr) >= 0) break;
         }
-
         var buffer = WB_get_(token, 'https://discounts-prices-api.wildberries.ru/api/v2/buffer/tasks?uploadID=' + upId, 'buffer/tasks');
         if (buffer && buffer.data && typeof buffer.data.status !== 'undefined') {
           var bst = Number(buffer.data.status); // 1=in progress
@@ -337,7 +362,6 @@ function WB_debugPriceUpload_(token, uploadIds, payloadWB, cabinet) {
           else { clog('buffer state', 'uploadID=' + upId + ', status=' + bst); }
           if (bst !== 1) break;
         }
-
         Utilities.sleep(1200);
       }
 
@@ -345,72 +369,91 @@ function WB_debugPriceUpload_(token, uploadIds, payloadWB, cabinet) {
       var details = WB_get_(token,
         'https://discounts-prices-api.wildberries.ru/api/v2/history/goods/task?uploadID=' + upId + '&limit=1000&offset=0',
         'history/goods/task');
-      if (!(details && details.data && Array.isArray(details.data.listGoods))) {
-        details = WB_get_(token,
+      var goodsArr = (details && details.data && (details.data.historyGoods || details.data.listGoods)) || [];
+      if (!goodsArr.length) {
+        var details2 = WB_get_(token,
           'https://discounts-prices-api.wildberries.ru/api/v2/buffer/goods/task?uploadID=' + upId + '&limit=1000&offset=0',
           'buffer/goods/task');
+        goodsArr = (details2 && details2.data && (details2.data.historyGoods || details2.data.bufferGoods || details2.data.listGoods)) || [];
       }
-
-      if (details && details.data && Array.isArray(details.data.listGoods)) {
-        details.data.listGoods.forEach(function(g){
-          var nm = Number(g && g.nmID);
-          if (!nm) return;
-          var err = String((g.errorText || g.error || '')).trim();
+      if (Array.isArray(goodsArr)) {
+        goodsArr.forEach(function(g){
+          var nm = Number(g && g.nmID); if (!nm) return;
           var R = ensureRec(nm, upId, statusStr || '');
+          var err = String((g.errorText || g.error || '')).trim();
           if (err) R.error = err;
+          if (/Sale due to high inventory|You can't change the item price/i.test(err)) R.block = 'sale_high_inventory';
         });
       }
 
-      // Если в деталях ничего не было — всё равно положим строки по исходному списку nmID
-      if ((!details || !details.data || !Array.isArray(details.data.listGoods)) && allNmIDs.length) {
-        allNmIDs.forEach(function(nm){
-          ensureRec(nm, upId, statusStr || '');
-        });
-      }
+      // Обновим общий статус для всех отправленных nmID, если он "сильнее" чем предзаполненный
+      allNmIDs.forEach(function(nm){ var R = ensureRec(nm, upId, statusStr || ''); });
     }
-  } else {
-    // Без uploadID: ведём строки по исходному набору nmID
-    allNmIDs.forEach(function(nm){ ensureRec(nm, '', 'no_upload'); });
   }
 
-  // Если вообще ничего не собралось — защитно выведем хотя бы «пустышки»
-  if (!Object.keys(recMap).length && allNmIDs.length) {
-    allNmIDs.forEach(function(nm){ ensureRec(nm, '', 'no_upload'); });
-  }
-
-  // === 2) Карантин и текущие цены ===
+  // === 2) Карантин и текущие цены + vendor + isBadTurnover ===
   var nmList = Object.keys(recMap).map(function(k){ return Number(k); });
   if (nmList.length) {
     var quarantineMap = WB_fetchQuarantine_(token, nmList);
     var pricesMap     = WB_fetchPrices_(token, nmList);
+
     nmList.forEach(function(nm){
-      var R = recMap[nm];
-      if (!R) return;
+      var R = recMap[nm]; if (!R) return;
       if (quarantineMap[nm]) R.quarantine = quarantineMap[nm];
-      if (pricesMap[nm]) {
-        R.price = pricesMap[nm].price;
-        R.discount = pricesMap[nm].discount;
-        if (typeof pricesMap[nm].discountedPrice !== 'undefined') R.discountedPrice = pricesMap[nm].discountedPrice;
-        if (typeof pricesMap[nm].clubDiscountedPrice !== 'undefined') R.clubDiscountedPrice = pricesMap[nm].clubDiscountedPrice;
+      var P = pricesMap[nm];
+      if (P) {
+        R.vendor = P.vendorCode || R.vendor || '';
+        if (!R.mode) R.mode = (P.editableSizePrice ? 'size' : 'product');
+        R.price  = (typeof P.price !== 'undefined') ? P.price : R.price;
+        R.discount = (typeof P.discount !== 'undefined') ? P.discount : R.discount;
+        if (typeof P.discountedPrice !== 'undefined') R.discountedPrice = P.discountedPrice;
+        if (typeof P.clubDiscountedPrice !== 'undefined') R.clubDiscountedPrice = P.clubDiscountedPrice;
+        if (typeof P.isBadTurnover !== 'undefined') R.badTurnover = P.isBadTurnover ? 'true' : '';
+      }
+
+      // Δ и OK? с допуском ±1 ₽
+      if (R.sentPrice !== '' && R.sentPrice != null && R.price !== '' && R.price != null) {
+        var sp = Number(R.sentPrice), cp = Number(R.price);
+        if (isFinite(sp) && isFinite(cp)) {
+          var d = cp - sp; var EPS = 1;
+          R.delta = Math.round(d * 100) / 100;
+          R.equal = (!R.block && Math.abs(d) <= EPS) ? 'OK' : '';
+        }
+      }
+
+      // Итоговый человеко-понятный статус/причина
+      if (R.error) { R.result = 'error'; R.reason = R.error; }
+      else if (R.block) { R.result = 'blocked'; R.reason = R.block; }
+      else if (R.quarantine) { R.result = 'blocked'; R.reason = 'quarantine'; }
+      else if (R.equal === 'OK') {
+        // отличаем «применилось» от «без изменений»
+        if (R.status === 'no_upload (runtime)' || R.status === 'sent') { R.result = 'unchanged'; R.reason = 'same_price'; }
+        else { R.result = 'applied'; R.reason = ''; }
+      } else {
+        R.result = 'pending'; R.reason = '';
       }
     });
   }
 
-  // === 3) Выгрузка в «🛠 Тех. лог» с H ===
+  // === 3) Выгрузка в лист «🛠 Тех. лог» с H ===
   var HEAD = [
     'Время', 'Площадка', 'Кабинет', 'UploadID', 'Статус',
-    'nmID', 'Ошибка', 'Карантин',
-    'Текущая цена', 'Скидка', 'Цена со скидкой', 'Клубная цена'
+    'nmID', 'Артикул продавца', 'Ошибка', 'Карантин', 'Блок (Sale/остатки)', 'Плохая оборачиваемость',
+    'Текущая цена', 'Скидка', 'Цена со скидкой', 'Клубная цена',
+    'Отправленная цена', 'Δ', 'OK?', 'Режим', 'Результат', 'Причина'
   ];
 
-  var rows = Object.keys(recMap).sort(function(a,b){ return Number(a)-Number(b); }).map(function(k){
-    var r = recMap[k];
-    return [
-      r.ts, r.plat, r.cabinet, r.uploadID, r.status,
-      r.nmID, r.error, r.quarantine,
-      r.price, r.discount, r.discountedPrice, r.clubDiscountedPrice
-    ];
-  });
+  var rows = Object.keys(recMap)
+    .sort(function(a,b){ return Number(a)-Number(b); })
+    .map(function(k){
+      var r = recMap[k];
+      return [
+        r.ts, r.plat, r.cabinet, r.uploadID, r.status,
+        r.nmID, r.vendor, r.error, r.quarantine, r.block, r.badTurnover,
+        r.price, r.discount, r.discountedPrice, r.clubDiscountedPrice,
+        r.sentPrice, r.delta, r.equal, r.mode, r.result, r.reason
+      ];
+    });
 
   WB_writeTechLogWB_(HEAD, rows);
   clog('written to sheet', 'rows=' + rows.length);
@@ -464,59 +507,104 @@ function WB_get_(token, url, tag) {
   return null;
 }
 
-/** Возвращает Map nmID->reason для карантина цен */
+/** Возвращает краткое описание карантина по nmID (only our nmIDs) */
 function WB_fetchQuarantine_(token, nmIDs) {
   var out = {};
   if (!nmIDs || !nmIDs.length) return out;
 
-  for (var i = 0; i < nmIDs.length; i += 1000) {
-    var chunk = nmIDs.slice(i, i + 1000);
-    var res = WB_post_(token,
-      'https://discounts-prices-api.wildberries.ru/api/v2/quarantine/goods',
-      { nmIDs: chunk }, 'quarantine/goods');
-    if (res && res.data && Array.isArray(res.data.listGoods)) {
-      res.data.listGoods.forEach(function(g){
-        var nm = Number(g && g.nmID);
-        if (!nm) return;
-        var reason = String(g.reason || g.error || '').trim();
-        if (reason) out[nm] = reason;
-      });
+  var need = new Set(nmIDs.map(Number).filter(Boolean));
+  var limit = 1000, offset = 0, guard = 0;
+
+  while (need.size && guard < 100) {
+    var url = 'https://discounts-prices-api.wildberries.ru/api/v2/quarantine/goods' +
+              '?limit=' + limit + '&offset=' + offset;
+    var res = WB_get_(token, url, 'quarantine/goods');
+    if (!(res && res.data)) break;
+    var list = res.data.quarantineGoods || [];
+    if (!list.length) break;
+
+    for (var i = 0; i < list.length; i++) {
+      var g  = list[i];
+      var nm = Number(g && g.nmID);
+      if (!need.has(nm)) continue;
+
+      var np = Number(g.newPrice), op = Number(g.oldPrice);
+      var nd = Number(g.newDiscount), od = Number(g.oldDiscount);
+      var diff = (typeof g.priceDiff !== 'undefined') ? g.priceDiff : (isFinite(np) && isFinite(op) ? (np - op) : '');
+      out[nm] = (isFinite(op) && isFinite(np))
+        ? ('old ' + op + ' → new ' + np + (isFinite(diff) ? ' (Δ ' + diff + ')' : '') + (isFinite(nd) ? ', disc ' + nd + '%' : ''))
+        : 'in quarantine';
+      need.delete(nm);
     }
+
+    offset += list.length;
+    guard++;
+    Utilities.sleep(650); // лимиты WB
   }
   return out;
 }
 
-/** Возвращает Map nmID->{price, discount, discountedPrice?, clubDiscountedPrice?} */
+/** Возвращает Map nmID → {vendorCode, price, discount, discountedPrice?, clubDiscountedPrice?, editableSizePrice?, isBadTurnover?} */
 function WB_fetchPrices_(token, nmIDs) {
   var out = {};
   if (!nmIDs || !nmIDs.length) return out;
 
   for (var i = 0; i < nmIDs.length; i += 1000) {
-    var chunk = nmIDs.slice(i, i + 1000);
-    var res = WB_post_(token,
-      'https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter',
-      { nmIDs: chunk }, 'list/goods/filter');
-    if (res && res.data && Array.isArray(res.data.listGoods)) {
-      res.data.listGoods.forEach(function(g){
-        var nm = Number(g && g.nmID);
-        if (!nm) return;
-        out[nm] = {
-          price: g.price,
-          discount: g.discount,
-          discountedPrice: g.discountedPrice,
-          clubDiscountedPrice: g.clubDiscountedPrice
-        };
-      });
-    }
+    var chunk = nmIDs.slice(i, i + 1000).map(Number).filter(Boolean);
+    var res = WB_post_(token, 'https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter', { nmList: chunk }, 'list/goods/filter');
+    if (!(res && res.data && Array.isArray(res.data.listGoods))) continue;
+
+    res.data.listGoods.forEach(function(g){
+      var nm = Number(g && g.nmID);
+      if (!nm) return;
+      var priceTop = (typeof g.price !== 'undefined') ? g.price : null;
+      var size0 = (Array.isArray(g.sizes) && g.sizes.length) ? g.sizes[0] : null;
+      var price = (priceTop != null) ? priceTop : (size0 && typeof size0.price !== 'undefined' ? size0.price : '');
+      var discountedPrice = (size0 && typeof size0.discountedPrice !== 'undefined') ? size0.discountedPrice : (price != null && typeof g.discount === 'number' ? Math.round(price * (100 - g.discount) / 100) : '');
+      var clubDiscountedPrice = (size0 && typeof size0.clubDiscountedPrice !== 'undefined') ? size0.clubDiscountedPrice : '';
+      out[nm] = {
+        vendorCode: g.vendorCode,
+        price: price,
+        discount: (typeof g.discount === 'number') ? g.discount : '',
+        discountedPrice: discountedPrice,
+        clubDiscountedPrice: clubDiscountedPrice,
+        editableSizePrice: !!g.editableSizePrice,
+        isBadTurnover: !!g.isBadTurnover
+      };
+    });
+    Utilities.sleep(650);
   }
   return out;
 }
 
-/**
- * Запись таблицы лога в лист «🛠 Тех. лог» с колонки H.
- * Перед записью: очищаем область H:… (все строки листа, по ширине заголовков),
- * затем пишем заголовки в 1-й строке и данные со 2-й.
- */
+/** Получить полную инфу о товарах (для выбора режима size/product): vendorCode, sizes[], editableSizePrice, isBadTurnover */
+function WB_fetchProductsInfo_(token, nmIDs) {
+  var out = {};
+  if (!nmIDs || !nmIDs.length) return out;
+
+  for (var i = 0; i < nmIDs.length; i += 1000) {
+    var chunk = nmIDs.slice(i, i + 1000).map(Number).filter(Boolean);
+    var res = WB_post_(token, 'https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter', { nmList: chunk }, 'list/goods/filter(full)');
+    if (!(res && res.data && Array.isArray(res.data.listGoods))) continue;
+
+    res.data.listGoods.forEach(function(g){
+      var nm = Number(g && g.nmID);
+      if (!nm) return;
+      out[nm] = {
+        vendorCode: g.vendorCode,
+        editableSizePrice: !!g.editableSizePrice,
+        sizes: Array.isArray(g.sizes) ? g.sizes.slice() : [],
+        price: (typeof g.price !== 'undefined') ? g.price : undefined,
+        discount: (typeof g.discount === 'number') ? g.discount : undefined,
+        isBadTurnover: !!g.isBadTurnover
+      };
+    });
+    Utilities.sleep(650);
+  }
+  return out;
+}
+
+/** Запись таблицы лога в лист «🛠 Тех. лог» с колонки H */
 function WB_writeTechLogWB_(HEAD, rows) {
   var ss = SpreadsheetApp.getActive();
   var name = '🛠 Тех. лог';
@@ -525,23 +613,28 @@ function WB_writeTechLogWB_(HEAD, rows) {
   var startCol = 8; // H
   var width = HEAD.length;
 
-  // Очистка области вставки по всей высоте листа (только контент)
+  // Очистка области по всей высоте листа (только контент)
   var maxRows = sh.getMaxRows();
   sh.getRange(1, startCol, maxRows, width).clearContent();
 
-  // Заголовки (1-я строка)
+  // Заголовки
   sh.getRange(1, startCol, 1, width).setValues([HEAD]).setFontWeight('bold');
 
-  // Данные (со 2-й строки)
+  // Данные
   if (rows && rows.length) {
     sh.getRange(2, startCol, rows.length, width).setValues(rows);
   }
 
   // Формат времени
-  sh.getRange(2, startCol, Math.max(1, rows.length), 1).setNumberFormat('dd.mm.yyyy HH:mm:ss');
+  sh.getRange(2, startCol, Math.max(1, (rows && rows.length) || 1), 1).setNumberFormat('dd.mm.yyyy HH:mm:ss');
 
-  // Авто-ширина для зоны лога
-  for (var c = 0; c < width; c++) {
-    sh.autoResizeColumn(startCol + c);
-  }
+  // Авто-ширина
+  for (var c = 0; c < width; c++) sh.autoResizeColumn(startCol + c);
+}
+
+/* ========================= УТИЛИТЫ ========================= */
+function chunk_(arr, n) {
+  var out = []; if (!arr || !arr.length) return out; n = Math.max(1, n|0);
+  for (var i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
 }

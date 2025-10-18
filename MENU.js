@@ -8,7 +8,11 @@ function onOpen() {
 function buildExportMenu_() {
   SpreadsheetApp.getUi()
     .createMenu('🚀 Экспорт')
-    .addItem('🔖 Цены', 'sendPricesFromCalculatorFast')
+    .addItem('🔖 Цены [⚖️ Калькулятор]', 'sendPricesFromCalculatorFast')
+        .addSeparator()
+    .addItem('🥡 Количество [🏘️ Собств. склады]', 'sendPricesFromCalculatorFast')      
+            .addSeparator()
+    .addItem('📬 Рецепт [🎏 Форкаст]', 'emailForecastAsXlsx')  
     .addToUi();
 }
 
