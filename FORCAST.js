@@ -230,7 +230,7 @@ function readSS_All_(){
     if (lr < 2 || lc < 2) return out;
     var hdrNorm = s.getRange(1,1,1,lc).getDisplayValues()[0].map(norm);
     var idxArt = hdrNorm.indexOf('артикул') + 1; if (idxArt <= 0) idxArt = 2;
-    var idxOwn = hdrNorm.indexOf('своя категория') + 1; if (idxOwn <= 0) idxOwn = 13;
+    var idxOwn = hdrNorm.indexOf('своя категория') + 1; if (idxOwn <= 0) idxOwn = 14;
 
     var vals = s.getRange(2,1,lr-1,lc).getDisplayValues();
     for (var i=0;i<vals.length;i++){

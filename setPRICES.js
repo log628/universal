@@ -206,7 +206,24 @@ function buildIdResolverByPlatformCabinet_(PLAT, cabinet) {
   var lastRow = artsSheet.getLastRow();
   if (lastRow < 2) { log('no data rows'); return { byDisplay: new Map(), byVendor: new Map(), byOffer: new Map(), byNm: new Map(), nmToVendor: new Map() }; }
 
-  var vals = artsSheet.getRange(2, 1, lastRow - 1, 12).getDisplayValues(); // A:L
+  var maxCols = Math.min(artsSheet.getLastColumn(), REF.ARTS_TOTAL_COLS || artsSheet.getLastColumn());
+  var header = artsSheet.getRange(1, 1, 1, maxCols).getDisplayValues()[0];
+  function norm_(s) { return String(s || '').replace(/\[[^\]]*\]/g, '').trim().toLowerCase(); }
+  var hdrNorm = header.map(norm_);
+  function findIndex_(names) {
+    var want = (names || []).map(norm_);
+    for (var i = 0; i < hdrNorm.length; i++) {
+      if (want.indexOf(hdrNorm[i]) !== -1) return i + 1;
+    }
+    return 0;
+  }
+
+  var idxCab = findIndex_(['кабинет']) || 1;
+  var idxArt = findIndex_(['артикул','артикул продавца']) || 2;
+  var idxSku = findIndex_(['sku','sku id','sku_id','nm','nmid','nm id']) || Math.min(11, maxCols);
+  var idxLabel = findIndex_(['наименование','название','раздел','категория','своя категория']);
+
+  var vals = artsSheet.getRange(2, 1, lastRow - 1, maxCols).getDisplayValues();
   var byDisplay = new Map();
   var byVendor  = new Map();
   var byOffer   = new Map();
@@ -215,13 +232,13 @@ function buildIdResolverByPlatformCabinet_(PLAT, cabinet) {
 
   var rowsSeen = 0;
   vals.forEach(function (row) {
-    var cab = String(row[0] || '').trim();
+    var cab = String(row[idxCab - 1] || '').trim();
     if (cab !== cabinet) return;
     rowsSeen++;
 
-    var B = String(row[1] || '').trim();   // OZ: offer_id | WB: vendorCode
-    var K = String(row[10] || '').trim();  // OZ: SKU      | WB: nmID
-    var L = String(row[11] || '').trim();  // Наименование
+    var B = String(row[idxArt - 1] || '').trim();   // OZ: offer_id | WB: vendorCode
+    var K = idxSku ? String(row[idxSku - 1] || '').trim() : '';
+    var L = idxLabel ? String(row[idxLabel - 1] || '').trim() : '';
 
     if (PLAT === 'OZ') {
       var offer = B;

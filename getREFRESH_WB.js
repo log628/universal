@@ -73,6 +73,64 @@ function getREFRESH_WB() {
     }
     return null;
   }
+  function extractBarcodesFromCard_(card) {
+    var seen = new Set();
+    var out = [];
+    function pushUnique_(val) {
+      if (val == null) return;
+      if (Array.isArray(val)) {
+        for (var a = 0; a < val.length; a++) pushUnique_(val[a]);
+        return;
+      }
+      if (typeof val === 'object') {
+        var handled = false;
+        if (val.barcode != null) { pushUnique_(val.barcode); handled = true; }
+        if (val.value != null)   { pushUnique_(val.value);   handled = true; }
+        if (val.code != null)    { pushUnique_(val.code);    handled = true; }
+        for (var key in val) {
+          if (!val.hasOwnProperty(key)) continue;
+          if (/code|barcode/i.test(String(key))) {
+            pushUnique_(val[key]);
+            handled = true;
+          }
+        }
+        if (!handled) {
+          for (var k in val) if (val.hasOwnProperty(k)) pushUnique_(val[k]);
+        }
+        return;
+      }
+      var str = String(val || '').trim();
+      if (!str) return;
+      var parts = str.split(/[,;\n]+/);
+      for (var p = 0; p < parts.length; p++) {
+        var piece = String(parts[p] || '').trim();
+        if (!piece) continue;
+        if (!seen.has(piece)) {
+          seen.add(piece);
+          out.push(piece);
+        }
+      }
+    }
+
+    if (!card) return '';
+    pushUnique_(card.barcode);
+    pushUnique_(card.barcodes);
+    if (Array.isArray(card.sizes)) {
+      for (var s = 0; s < card.sizes.length; s++) {
+        var size = card.sizes[s];
+        pushUnique_(size && size.barcode);
+        pushUnique_(size && size.barcodes);
+        if (size && Array.isArray(size.skus)) {
+          for (var q = 0; q < size.skus.length; q++) {
+            pushUnique_(size.skus[q] && size.skus[q].barcode);
+            pushUnique_(size.skus[q] && size.skus[q].barcodes);
+          }
+        }
+      }
+    }
+    pushUnique_(card.nomenclatures);
+    return out.join(', ');
+  }
   function withToken_(cabName, role, callFn, tag) {
     var rec = roleMap.get(cabName) || { prices: [], content: [], stats: [], supplies: [], any: [] };
     var pools = [];
@@ -167,6 +225,7 @@ function getREFRESH_WB() {
         subjectName: subjNm,
         vol: vol,
         price: price,
+        barcode: extractBarcodesFromCard_(c),
         section: 'X',
         ownCat: sec.ownCat || ''
       });
@@ -211,8 +270,9 @@ function getREFRESH_WB() {
         rec.vol,                 // I
         rec.price,               // J
         rec.nm,                  // K
-        rec.section,             // L
-        rec.ownCat               // M
+        rec.barcode || '',       // L
+        rec.section,             // M
+        rec.ownCat               // N
       ]);
     }
     return rows;
@@ -279,8 +339,8 @@ function getREFRESH_WB() {
     sh.getRange(1,  6, 1, 3).setBackground('#6aa84f'); // F:H
     sh.getRange(1,  9, 1, 1).setBackground('#7f6000'); // I
     sh.getRange(1, 10, 1, 1).setBackground('#990000'); // J
-    sh.getRange(1, 11, 1, 1).setBackground('#333333'); // K
-    sh.getRange(1, 12, 1, 2).setBackground('#5b0f00'); // L:M
+    sh.getRange(1, 11, 1, 2).setBackground('#333333'); // K:L
+    sh.getRange(1, 13, 1, 2).setBackground('#5b0f00'); // M:N
 
     try {
       var a1Text = HEADERS_[0]; // "[ WB ] Кабинет"

@@ -12,7 +12,7 @@ function getREFRESH_OZ() {
   var DST_SHEET   = REF.SHEETS.ARTS_OZ;
   var PARAM_SHEET = REF.SHEETS.PARAMS;
 
-  var TOTAL_COLS = 13; // A..M
+  var TOTAL_COLS = REF.ARTS_TOTAL_COLS || 14; // A..N
   var HEADERS = REF.getArtsHeaders('OZ');
 
   // ===== 1) Префиксы «Раздел» и «Своя категория» (P:Q)
@@ -132,6 +132,62 @@ function getREFRESH_OZ() {
     function pickSku_(det, offer) {
       return (det && (det.sku || det.sku_id || det.id)) || skuFallbackMap[offer] || '';
     }
+    function pickBarcodes_(det, csv) {
+      var seen = new Set();
+      var out = [];
+      function pushUnique_(val) {
+        if (val == null) return;
+        if (Array.isArray(val)) {
+          for (var ii = 0; ii < val.length; ii++) pushUnique_(val[ii]);
+          return;
+        }
+        if (typeof val === 'object') {
+          var handled = false;
+          if (val.barcode != null) { pushUnique_(val.barcode); handled = true; }
+          if (val.value != null)   { pushUnique_(val.value);   handled = true; }
+          if (val.code != null)    { pushUnique_(val.code);    handled = true; }
+          for (var key in val) {
+            if (!val.hasOwnProperty(key)) continue;
+            if (/code|barcode/i.test(String(key))) {
+              pushUnique_(val[key]);
+              handled = true;
+            }
+          }
+          if (!handled) {
+            for (var k in val) if (val.hasOwnProperty(k)) pushUnique_(val[k]);
+          }
+          return;
+        }
+        var str = String(val || '').trim();
+        if (!str) return;
+        var parts = str.split(/[,;\n]+/);
+        for (var p = 0; p < parts.length; p++) {
+          var piece = String(parts[p] || '').trim();
+          if (!piece) continue;
+          if (!seen.has(piece)) {
+            seen.add(piece);
+            out.push(piece);
+          }
+        }
+      }
+
+      if (det) {
+        pushUnique_(det.barcode);
+        pushUnique_(det.barcodes);
+      }
+      if (csv) {
+        pushUnique_(csv['Штрихкод']);
+        pushUnique_(csv['Штрих-код']);
+        pushUnique_(csv['Штрихкод товара']);
+        pushUnique_(csv['Штрих-код товара']);
+        pushUnique_(csv['Штрихкоды']);
+        pushUnique_(csv['Штрих-коды']);
+        pushUnique_(csv['Штрихкоды товара']);
+        pushUnique_(csv['Штрих-коды товара']);
+        pushUnique_(csv['barcode']);
+      }
+      return out.join(', ');
+    }
     function calcVolumeLitersFromCsv_(csv) {
       return String(csv['Объем товара, л'] || '').replace(/\./g, ',');
     }
@@ -166,6 +222,8 @@ function getREFRESH_OZ() {
       var catCell = ct.category || '';
       if (ct.typeName) catCell += ' | ' + ct.typeName;
 
+      var barcode = pickBarcodes_(det, csv);
+
       rows.push([
         cabKey,                                        // A
         offer,                                         // B
@@ -178,8 +236,9 @@ function getREFRESH_OZ() {
         calcVolumeLitersFromCsv_(csv),                 // I
         pickPriceFromCsv_(csv),                        // J
         pickSku_(det, offer),                          // K
-        'X',                                           // L
-        sec.ownCat || ''                               // M
+        barcode,                                       // L
+        'X',                                           // M
+        sec.ownCat || ''                               // N
       ]);
     }
     return rows;
@@ -239,8 +298,8 @@ function getREFRESH_OZ() {
     sh.getRange(1, 6, 1, 3).setBackground('#6aa84f'); // F:H
     sh.getRange(1, 9, 1, 1).setBackground('#7f6000'); // I
     sh.getRange(1,10, 1, 1).setBackground('#990000'); // J
-    sh.getRange(1,11, 1, 1).setBackground('#333333'); // K
-    sh.getRange(1,12, 1, 2).setBackground('#5b0f00'); // L:M
+    sh.getRange(1,11, 1, 2).setBackground('#333333'); // K:L
+    sh.getRange(1,13, 1, 2).setBackground('#5b0f00'); // M:N
     try {
       var a1Text = HEADERS[0]; // "[ OZ ] Кабинет"
       var tagEnd = a1Text.indexOf(']') + 1;

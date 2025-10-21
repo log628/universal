@@ -282,7 +282,7 @@ REF.readSimkaBase = function () {
   /* ========= Заголовки [OZ]/[WB] Артикулы ========= */
   REF.ARTS_HEADERS_BASE = [
     'Кабинет','Артикул','Отзывы','Рейтинг','Категория',
-    'FBO','FBS','RFBS','Объем','Цена','SKU','Раздел','Своя категория'
+    'FBO','FBS','RFBS','Объем','Цена','SKU','Баркод','Раздел','Своя категория'
   ];
   REF.getArtsHeaders = function (tag /* 'OZ'|'WB' */) {
     var hdr = REF.ARTS_HEADERS_BASE.slice();
@@ -290,8 +290,8 @@ REF.readSimkaBase = function () {
     if (t) hdr[0] = '[ ' + t + ' ] Кабинет';
     return hdr;
   };
-  REF.ARTS_COLS = { A:1,B:2,C:3,D:4,E:5,F:6,G:7,H:8,I:9,J:10,K:11,L:12,M:13 };
-  REF.ARTS_TOTAL_COLS = 13;
+  REF.ARTS_COLS = { A:1,B:2,C:3,D:4,E:5,F:6,G:7,H:8,I:9,J:10,K:11,L:12,M:13,N:14 };
+  REF.ARTS_TOTAL_COLS = 14;
 
 
   /* ========= Заголовки [OZ]/[WB] Физ. оборот ========= */
