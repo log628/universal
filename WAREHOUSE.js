@@ -47,6 +47,7 @@ function buildOwnWarehouses() {
   function styleHeader(r,bg,fc){r.setBackground(bg).setFontColor(fc).setFontWeight('bold').setHorizontalAlignment('center').setVerticalAlignment('middle').setFontFamily('Roboto');}
   function clearContents(r){r.clear({contentsOnly:true, formatOnly:false});}
   function clearFills(r){r.setBackground('#ffffff');}
+  function clearBorders(r){r.setBorder(false,false,false,false,false,false);} // NEW: сброс границ
   function autoPlus(sh,col,px){try{sh.autoResizeColumn(col);var w=sh.getColumnWidth(col);sh.setColumnWidth(col,Math.max(10,w+(px|0)));}catch(_){}} 
   function articleToProduct(art){var s=cleanStr(art);if(s.length>=3)s=s.substring(3);s=s.replace(/_cat\d+$/i,'');return s;}
   function ceilHalf(x){return Math.ceil(x/2);}
@@ -99,6 +100,24 @@ function buildOwnWarehouses() {
       var a=toNumber(Gvals[r][0]);
       if(!t) continue;
       if(a>0){ items.push([t]); avail.push([a]); } // только >0
+    }
+  }
+
+  // === СОРТИРОВКА ПО «Товар» (K:L) по алфавиту, с русской локалью ===
+  if (items.length) {
+    var pairs = [];
+    for (var i = 0; i < items.length; i++) {
+      pairs.push({ t: String(items[i][0] || ''), a: avail[i] ? avail[i][0] : '' });
+    }
+    pairs.sort(function(p, q) {
+      return p.t.localeCompare(q.t, 'ru', { sensitivity: 'base' });
+    });
+    // раскладываем обратно в items/avail
+    items = new Array(pairs.length);
+    avail = new Array(pairs.length);
+    for (var i = 0; i < pairs.length; i++) {
+      items[i] = [pairs[i].t];
+      avail[i] = [pairs[i].a];
     }
   }
 
@@ -233,6 +252,15 @@ function buildOwnWarehouses() {
     cabSEC[idx]=sec;
   }
 
+  // ===== NEW: Сброс старых границ в правой части N… на высоту по максимальному числу строк (+ небольшой запас) =====
+  var maxCabRows = 0;
+  for (var i=0; i<cabRows.length; i++) if (cabRows[i] > maxCabRows) maxCabRows = cabRows[i];
+  var clearHeight = 2 + maxCabRows + 5; // Row2-3 (шапки) + данные + небольшой запас
+  var rightCols = Math.max(0, sh.getMaxColumns() - (startCol - 1));
+  if (rightCols > 0 && clearHeight > 0) {
+    clearBorders(sh.getRange(2, startCol, clearHeight, rightCols));
+  }
+
   // ===== 3) Заполнение S/E/C с учётом sim01 и режимов =====
   var allProductsSet=new Set();
   for (var ci=0; ci<fullCabs.length; ci++){
@@ -325,9 +353,9 @@ function buildOwnWarehouses() {
 
       var sSet = toNumber(fmRules[bestIdx].s);
       var ecSet = toNumber(fmRules[bestIdx].ec);
-      var sOut = (sSet>0)?sSet:'';
-      var eOut = (ecSet>0)?ecSet:'';
-      var cOut = (ecSet>0)?ecSet:'';
+      var sOut = (sSet>0)?sSet:'';     // 0 → пусто
+      var eOut = (ecSet>0)?ecSet:'';   // 0 → пусто
+      var cOut = (ecSet>0)?ecSet:'';   // 0 → пусто
 
       for (var ci=0; ci<fullCabs.length; ci++){
         var pF=cabProds[ci]||[], sF=cabSEC[ci];
@@ -387,16 +415,16 @@ function buildOwnWarehouses() {
   }
 
   // Найдём мердж-шапки в B:H и расставим D под ними
-  var bhRange = sh.getRange(1, 2, sh.getMaxRows(), 7); // B:H
-  var merges = bhRange.getMergedRanges();
+  var bhRange2 = sh.getRange(1, 2, sh.getMaxRows(), 7); // B:H
+  var merges2 = bhRange2.getMergedRanges();
   var bhHeaders = new Map();
-  for (var m=0; m<merges.length; m++){
-    var rg = merges[m];
-    if (rg.getNumRows() !== 1) continue;
-    var col = rg.getColumn();
-    if (col < 2 || col > 8) continue;
-    var name = cleanStr(rg.getCell(1,1).getDisplayValue());
-    if (name) bhHeaders.set(name, rg.getRow());
+  for (var m=0; m<merges2.length; m++){
+    var rg2 = merges2[m];
+    if (rg2.getNumRows() !== 1) continue;
+    var col2 = rg2.getColumn();
+    if (col2 < 2 || col2 > 8) continue;
+    var name2 = cleanStr(rg2.getCell(1,1).getDisplayValue());
+    if (name2) bhHeaders.set(name2, rg2.getRow());
   }
 
   bhHeaders.forEach(function(headerRow, cabName){

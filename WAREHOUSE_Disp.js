@@ -19,8 +19,8 @@ function runWarehouseWithPreflight() {
   }
 
   try {
-    // 1) Всегда — быстрый импорт склада (только G/H + AH:AK)
-    ss.toast('Обновление «Доступно» (G/H)…', 'Склад + СС', 3);
+    // 1) Всегда — быстрый импорт склада (только G + AH:AK)
+    ss.toast('Обновление «Доступно» …', 'Склад + СС', 3);
     if (typeof Import_Sklad_GHOnly === 'function') {
       Import_Sklad_GHOnly(); // синхронно; к моменту продолжения — завершён
     } else {
@@ -48,6 +48,40 @@ function runWarehouseWithPreflight() {
     SpreadsheetApp.getUi().alert('Ошибка префлайта: ' + (e && e.message ? e.message : e));
   }
 }
+
+
+
+
+function runWarehouseFast() {
+  var ss = SpreadsheetApp.getActive();
+  try {
+    // 1) Обновляем склад (как в префлайте перед окном)
+    ss.toast('Обновление «Доступно» …', 'Склад + СС', 3);
+    if (typeof Import_Sklad_GHOnly === 'function') {
+      Import_Sklad_GHOnly(); // синхронно
+    } else {
+      SpreadsheetApp.getUi().alert('Функция Import_Sklad_GHOnly() не найдена');
+      return;
+    }
+
+    // 2) Формируем «🏘️ Собств. склады» (без проверок свежести и без диалога)
+    ss.toast('Формирование «🏘️ Собств. склады»…', 'Склад + СС', 3);
+    if (typeof buildOwnWarehouses === 'function') {
+      buildOwnWarehouses();
+      ss.toast('Готово ✅', 'Склад + СС', 3);
+    } else {
+      SpreadsheetApp.getUi().alert('Функция buildOwnWarehouses() не найдена');
+    }
+  } catch (e) {
+    SpreadsheetApp.getUi().alert('Ошибка: ' + (e && e.message ? e.message : e));
+  }
+}
+
+
+
+
+
+
 
 /** Вспомогательный: проверка свежести одного лейбла в «⚙️ Параметры» */
 function WD_isFresh_(sheet, cfg, label, nowDate) {
@@ -77,7 +111,7 @@ function WD_cfg_() {
     RANGE_LABELS_COL: 19 + 0, // S
     RANGE_TIMES_COL : 19 + 1, // T
     sources: [
-      { key: 'arts', label: 'Артикулы OZ', runner: 'getREFRESH_OZ', expectSec: 60 }
+      { key: 'arts', label: 'Артикулы OZ', runner: 'getREFRESH_OZ', expectSec: 100 }
     ],
     staleHours: 12
   };
