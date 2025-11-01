@@ -110,24 +110,25 @@ function getREFRESH_OZ() {
       return { category: category, typeName: typeName };
     }
 
-    function pickCommissions_(det) {
-      var fboPct = '', fbsPct = '', rfbsPct = '';
-      var arr = det && Array.isArray(det.commissions) ? det.commissions : [];
-      var toNum = (typeof REF !== 'undefined' && typeof REF.toNumber === 'function')
-        ? REF.toNumber
-        : function(v){ return Number(String(v).replace(',', '.')); };
-      for (var i = 0; i < arr.length; i++) {
-        var c = arr[i];
-        var v = (c && c.percent != null) ? toNum(c.percent) : NaN;
-        if (!isNaN(v)) {
-          v = v + 5; // +5 п.п. для всех схем
-          if (c.sale_schema === 'FBO')  fboPct  = v;
-          if (c.sale_schema === 'FBS')  fbsPct  = v;
-          if (c.sale_schema === 'RFBS') rfbsPct = v;
-        }
-      }
-      return { fboPct: fboPct, fbsPct: fbsPct, rfbsPct: rfbsPct };
+function pickCommissions_(det) {
+  var fboPct = '', fbsPct = '', rfbsPct = '';
+  var arr = det && Array.isArray(det.commissions) ? det.commissions : [];
+  var toNum = (typeof REF !== 'undefined' && typeof REF.toNumber === 'function')
+    ? REF.toNumber
+    : function(v){ return Number(String(v).replace(',', '.')); };
+  for (var i = 0; i < arr.length; i++) {
+    var c = arr[i];
+    var v = (c && c.percent != null) ? toNum(c.percent) : NaN;
+    if (!isNaN(v)) {
+      // без надбавки
+      if (c.sale_schema === 'FBO')  fboPct  = v;
+      if (c.sale_schema === 'FBS')  fbsPct  = v;
+      if (c.sale_schema === 'RFBS') rfbsPct = v;
     }
+  }
+  return { fboPct: fboPct, fbsPct: fbsPct, rfbsPct: rfbsPct };
+}
+
 
     function pickSku_(det, offer) {
       return (det && (det.sku || det.sku_id || det.id)) || skuFallbackMap[offer] || '';

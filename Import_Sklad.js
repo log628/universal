@@ -715,7 +715,7 @@ function Import_Sklad_GHOnly() {
   const T0 = Date.now();
   const t = (label) => `[+${String(Date.now()-T0).padStart(6,' ')} ms] ${label}`;
   console.log(t('START Import_Sklad_GOnly'));
-  ss.toast('Импорт МойСклад → обновление G (Наличие)', 'Склад + СС (легкий)', 3);
+  ss.toast('Импорт МойСклад → обновление G (Наличие)', 'Быстрый импорт', 3);
 
   try {
     // === 0) Токен МС (AF2)
