@@ -24,34 +24,32 @@ var OZONAPI = (function () {
   OZONAPI._accounts = null;               // { [cabinetName]: { client_id, api_key, name, short } }
   OZONAPI._categoryCacheStatic = null;    // общий кэш дерева категорий на время запуска
 
-// ====== Статика: чтение аккаунтов из "⚙️ Параметры" ======
-OZONAPI.initFromSheet = function () {
-  var ss = SpreadsheetApp.getActive();
-  var sh = ss.getSheetByName('⚙️ Параметры');
-  if (!sh) throw new Error('Нет листа "⚙️ Параметры"');
+  // ====== Статика: чтение аккаунтов из "⚙️ Параметры" ======
+  OZONAPI.initFromSheet = function () {
+    var ss = SpreadsheetApp.getActive();
+    var sh = ss.getSheetByName('⚙️ Параметры');
+    if (!sh) throw new Error('Нет листа "⚙️ Параметры"');
 
-  // Структура: A=Кабинет, B=ID кабинета (Client-Id), C=API KEY, D=Площадка/Тип (должно быть "OZON")
-  var rows = sh.getRange('A2:D').getValues();
+    // Структура: A=Кабинет, B=ID кабинета (Client-Id), C=API KEY, D=Площадка/Тип (должно быть "OZON")
+    var rows = sh.getRange('A2:D').getValues();
 
-  OZONAPI._accounts = rows.reduce(function (acc, row) {
-    var cabinetName = String(row[0] || '').trim();
-    var clientId    = row[1];
-    var apiKey      = row[2];
-    var platform    = String(row[3] || '').trim().toUpperCase(); // D
+    OZONAPI._accounts = rows.reduce(function (acc, row) {
+      var cabinetName = String(row[0] || '').trim();
+      var clientId    = row[1];
+      var apiKey      = row[2];
+      var platform    = String(row[3] || '').trim().toUpperCase(); // D
 
-    // Валидно только если есть A,B,C и D == "OZON"
-    if (cabinetName && clientId && apiKey && platform === 'OZON') {
-      acc[cabinetName] = {
-        client_id: clientId,
-        api_key: apiKey,
-        name: cabinetName,
-        short: '' // раньше тут было "краткое название"; при желании можно перенести в другую колонку
-      };
-    }
-    return acc;
-  }, {});
-};
-
+      if (cabinetName && clientId && apiKey && platform === 'OZON') {
+        acc[cabinetName] = {
+          client_id: clientId,
+          api_key: apiKey,
+          name: cabinetName,
+          short: ''
+        };
+      }
+      return acc;
+    }, {});
+  };
 
   OZONAPI.getAccounts = function () {
     if (!OZONAPI._accounts) OZONAPI.initFromSheet();
@@ -78,27 +76,22 @@ OZONAPI.initFromSheet = function () {
         var code = resp.getResponseCode();
         var text = resp.getContentText();
 
-        // Парсим JSON только если коды "нормальные" или заведомо JSON (иногда 4xx тоже json)
         var data;
         try { data = JSON.parse(text || '{}'); } catch (parseErr) {
-          // Если не JSON и это ошибка сервера/лимит — уйдём на ретрай
           if (code >= 500 || code === 429) {
             Utilities.sleep(baseDelay * Math.pow(1.8, attempt - 1));
             continue;
           }
-          // Для 4xx без JSON — бросаем сразу
           throw new Error('Bad response (' + code + '), not JSON: ' + String(text).slice(0, 200));
         }
 
         if (code >= 200 && code < 300) return data;
 
-        // Обработка 429/5xx — ретрай с ростом задержки
         if (code === 429 || code >= 500) {
           Utilities.sleep(baseDelay * Math.pow(1.8, attempt - 1));
           continue;
         }
 
-        // Остальные 4xx — фатально
         throw new Error('HTTP ' + code + ' ' + (data && (data.message || data.error)) );
 
       } catch (err) {
@@ -126,12 +119,11 @@ OZONAPI.initFromSheet = function () {
       attempts++;
       var data = this._post('/v1/report/info', {
         payload: { code: reportId },
-        maxAttempts: 3,          // короткие внутренние попытки на сетевые глитчи
+        maxAttempts: 3,
         baseDelayMs: 300
       });
       if (data && data.result) {
         if (data.result.status === 'success') return data.result.file;
-        // статус не готов → ждём и пробуем снова
         if (attempts > 20) throw new Error('Не дождались отчёта (status=' + data.result.status + ')');
         Utilities.sleep(1000);
         continue;
@@ -141,9 +133,23 @@ OZONAPI.initFromSheet = function () {
     }
   };
 
+  // === CSV с авто-детектом кодировки и «;»
   OZONAPI.prototype.getCSV = function (link) {
     if (!link) throw new Error('Нет ссылки на файл');
     var resp = UrlFetchApp.fetch(link);
+    var blob = resp.getBlob();
+
+    // Попытка 1: авто
+    try {
+      return Utilities.parseCsv(blob.getDataAsString(), ';');
+    } catch (_) {}
+
+    // Попытка 2: CP1251
+    try {
+      return Utilities.parseCsv(blob.getDataAsString('Windows-1251'), ';');
+    } catch (_) {}
+
+    // Попытка 3: UTF-8
     var txt = resp.getContentText('UTF-8');
     return Utilities.parseCsv(txt, ';');
   };
@@ -193,51 +199,48 @@ OZONAPI.initFromSheet = function () {
     return finArr;
   };
 
-// ====== Дерево категорий/типов (RU) — общий статический кэш ======
-OZONAPI.prototype.getCategoryTreeRU = function () {
-  // 1) общий статический кэш
-  if (OZONAPI._categoryCacheStatic) return OZONAPI._categoryCacheStatic;
-  // 2) локальный кэш инстанса
-  if (this._categoryCache) return this._categoryCache;
+  // ====== Дерево категорий/типов (RU) — общий статический кэш ======
+  OZONAPI.prototype.getCategoryTreeRU = function () {
+    if (OZONAPI._categoryCacheStatic) return OZONAPI._categoryCacheStatic;
+    if (this._categoryCache) return this._categoryCache;
 
-  var data = this._post('/v1/description-category/tree', {
-    payload: { language: 'RU' },
-    maxAttempts: 10,
-    baseDelayMs: 500
-  });
+    var data = this._post('/v1/description-category/tree', {
+      payload: { language: 'RU' },
+      maxAttempts: 10,
+      baseDelayMs: 500
+    });
 
-  var byCategoryId = {};       // { description_category_id: category_name }
-  var byTypeId     = {};       // { type_id: category_name (родительская категория) }
-  var typeNameByTypeId = {};   // { type_id: type_name }
+    var byCategoryId = {};
+    var byTypeId     = {};
+    var typeNameByTypeId = {};
 
-  var walk = function (node, parentCategoryName) {
-    if (!node) return;
-    var catId   = node.description_category_id;
-    var catName = node.category_name || parentCategoryName || '';
+    var walk = function (node, parentCategoryName) {
+      if (!node) return;
+      var catId   = node.description_category_id;
+      var catName = node.category_name || parentCategoryName || '';
 
-    if (catId && node.category_name) byCategoryId[String(catId)] = node.category_name;
+      if (catId && node.category_name) byCategoryId[String(catId)] = node.category_name;
 
-    if (node.type_id) {
-      var tid = String(node.type_id);
-      byTypeId[tid] = catName || '';
-      if (node.type_name) typeNameByTypeId[tid] = node.type_name;
+      if (node.type_id) {
+        var tid = String(node.type_id);
+        byTypeId[tid] = catName || '';
+        if (node.type_name) typeNameByTypeId[tid] = node.type_name;
+      }
+
+      if (Array.isArray(node.children)) {
+        node.children.forEach(function (child) { walk(child, node.category_name || parentCategoryName || ''); });
+      }
+    };
+
+    if (data && Array.isArray(data.result)) {
+      data.result.forEach(function (root) { walk(root, null); });
     }
 
-    if (Array.isArray(node.children)) {
-      node.children.forEach(function (child) { walk(child, node.category_name || parentCategoryName || ''); });
-    }
+    var cache = { byCategoryId: byCategoryId, byTypeId: byTypeId, typeNameByTypeId: typeNameByTypeId };
+    this._categoryCache = cache;
+    OZONAPI._categoryCacheStatic = cache;
+    return cache;
   };
-
-  if (data && Array.isArray(data.result)) {
-    data.result.forEach(function (root) { walk(root, null); });
-  }
-
-  var cache = { byCategoryId: byCategoryId, byTypeId: byTypeId, typeNameByTypeId: typeNameByTypeId };
-  this._categoryCache = cache;
-  OZONAPI._categoryCacheStatic = cache; // общий кэш
-  return cache;
-};
-
 
   // ====== Цены ======
   OZONAPI.prototype.getPrices = function () {
@@ -256,10 +259,6 @@ OZONAPI.prototype.getCategoryTreeRU = function () {
 
       if (data && data.items) finArr = finArr.concat(data.items);
 
-      // Надёжная остановка:
-      // - если нет cursor в ответе → конец
-      // - если items меньше limit → конец
-      // - защитный лимит итераций
       var hasCursor = !!(data && data.cursor);
       if (!hasCursor || !data.items || data.items.length < payload.limit || guard > 200) break;
 
@@ -268,16 +267,58 @@ OZONAPI.prototype.getCategoryTreeRU = function () {
     return finArr;
   };
 
+// Точечное получение цен по списку offer_id (быстро, без CSV)
+OZONAPI.prototype.getPricesByOffers = function (offerIds) {
+  if (!Array.isArray(offerIds) || offerIds.length === 0) return {};
+  var url = '/v5/product/info/prices';
+
+  function toNum_(v) {
+    if (typeof REF !== 'undefined' && typeof REF.toNumber === 'function') return REF.toNumber(v);
+    var s = String(v == null ? '' : v).replace(/\s/g, '').replace(',', '.');
+    var n = parseFloat(s);
+    return isFinite(n) ? n : NaN;
+  }
+
+  var CH = 1000; // безопасный батч
+  var map = {};
+
+  for (var i = 0; i < offerIds.length; i += CH) {
+    var slice = offerIds.slice(i, i + CH);
+
+    var data = this._post(url, {
+      payload: { cursor: "", limit: CH, filter: { visibility: 'ALL', offer_id: slice } },
+      maxAttempts: 10,
+      baseDelayMs: 300
+    });
+
+    var items = (data && data.items) || [];
+    for (var j = 0; j < items.length; j++) {
+      var it = items[j] || {};
+      var offer = String(it.offer_id || it.offer || '').trim();
+      if (!offer) continue;
+
+      // пытаемся вытащить числовую цену из разных полей, Ozon менял схему
+      var p = null;
+      if (it.price && it.price.price != null) p = it.price.price;
+      if (p == null && it.price && it.price.min_price != null) p = it.price.min_price;
+      if (p == null && it.current_prices && it.current_prices.price != null) p = it.current_prices.price;
+
+      var num = toNum_(p);
+      if (!isNaN(num)) map[offer] = num;
+    }
+  }
+  return map;
+};
+
+
+
+
   // ====== Остатки (FBS отчёт) ======
   OZONAPI.prototype.makeFbsReport = function () {
-    // Корректное имя поля склада — warehouse_id
     var payload = { language: 'DEFAULT' };
-
     if (this.storeId != null && this.storeId !== '') {
       payload.warehouse_id = [this.storeId];
     }
-    // Если склад не задан — не отправляем поле вовсе (пусть API интерпретирует как "по всем доступным" или вернёт 400)
-
     var data = this._post('/v1/report/warehouse/stock', {
       payload: payload,
       maxAttempts: 10,
@@ -374,7 +415,6 @@ OZONAPI.prototype.getCategoryTreeRU = function () {
 
         payload.offset += payload.limit;
         if (payload.offset >= 20000) {
-          // "ползём" по времени
           var last = data.result.postings[data.result.postings.length - 1];
           payload.filter.since = new Date(last.in_process_at).toISOString();
           payload.offset = 0;
@@ -397,16 +437,14 @@ OZONAPI.prototype.getCategoryTreeRU = function () {
   };
 
   // ====== Заказы FBO ======
-    OZONAPI.prototype.getOrdersFbo = function (days) {
+  OZONAPI.prototype.getOrdersFbo = function (days) {
     days = days == null ? 60 : days;
     var url = '/v2/posting/fbo/list';
 
-    // Верхняя граница — конец вчера (сегодня не берём)
     var to = new Date();
     to.setDate(to.getDate() - 1);
     to.setHours(23, 59, 59, 999);
 
-    // Нижняя — days дней назад от "to" (начало дня)
     var since = new Date(to);
     since.setDate(since.getDate() - (days - 1));
     since.setHours(0, 0, 0, 0);
@@ -426,7 +464,7 @@ OZONAPI.prototype.getCategoryTreeRU = function () {
       guard++;
       var data = this._post(url, {
         payload: payload,
-        maxAttempts: 6,     // было 10 — чуть снизим для скорости
+        maxAttempts: 6,
         baseDelayMs: 250
       });
 
@@ -437,7 +475,6 @@ OZONAPI.prototype.getCategoryTreeRU = function () {
         payload.offset += payload.limit;
         if (payload.offset >= 20000) {
           var last = data.result[data.result.length - 1];
-          // ползём по времени, чтобы не упереться в лимит offset
           payload.filter.since = new Date(last.in_process_at || last.created_at).toISOString();
           payload.offset = 0;
         }
@@ -463,7 +500,7 @@ OZONAPI.prototype.getCategoryTreeRU = function () {
       });
       var items = (data && data.items) || [];
       for (var j = 0; j < items.length; j++) {
-        var it = items[j];
+        var it = items[j] || {};
         var offer = it.offer_id || it.offer || '';
         var sku   = it.sku || it.sku_id || it.id || '';
         if (offer) map[offer] = sku;
@@ -473,7 +510,6 @@ OZONAPI.prototype.getCategoryTreeRU = function () {
   };
 
   // ====== Остатки по SKU через analytics/stocks (батчи по 100) ======
-  // Возвращает массив объектов {sku, offer_id?, warehouse_name, cluster_name?, available, in_way_to_client?, in_way_to_warehouse?}
   OZONAPI.prototype.analyticsStocksBySkus = function(skus) {
     if (!Array.isArray(skus) || skus.length === 0) return [];
     var url = '/v1/analytics/stocks';
@@ -487,16 +523,11 @@ OZONAPI.prototype.getCategoryTreeRU = function () {
         baseDelayMs: 250
       });
       var items = (data && data.items) || [];
-      for (var k = 0; k < items.length; k++) {
-        out.push(items[k]);
-      }
-      Utilities.sleep(200); // деликатная пауза
+      for (var k = 0; k < items.length; k++) out.push(items[k]);
+      Utilities.sleep(200);
     }
     return out;
   };
-
-
-
 
   return OZONAPI;
 })();

@@ -4,11 +4,11 @@
  *   runLayoutImmediate(selectedCab?)
  *
  * Источники выбираются строго через REF.getCurrentPlatform():
- *   - [OZ]/[WB] Артикулы  (A:M, 13 колонок; M = «Своя категория»)
+ *   - [OZ]/[WB] Артикулы  (гибкая ширина; ищем колонки по заголовкам)
  *   - [OZ]/[WB] Физ. оборот (A:D)
  *
  * Контрол кабинета — ИМЕНОВАННЫЙ ДИАПАЗОН REF.NAMED.CAB_CTRL (= 'muff_cabs')
- * «⛓️ Параллель» рендерится инлайном вместе с калькулятором (A:E + M)
+ * «⛓️ Параллель» рендерится инлайном вместе с калькулятором (A:E + M/«СС»)
  ***************************************************************/
 
 //////////////////// Константы ////////////////////
@@ -449,21 +449,26 @@ function collectRowsForCalculator_(cabinet, ctx) {
 
   const lastRow = shS.getLastRow();
   const lastCol = shS.getLastColumn();
-  if (lastRow < 2 || lastCol < 13) return emptyCalcRows_();
+  if (lastRow < 2 || lastCol < 2) return emptyCalcRows_();
 
-  // ----- индексы колонок -----
-  const headers = shS.getRange(1,1,1,13).getValues()[0];
-  const colCab    = findHeaderIndexFlexible_(headers, ['Кабинет'])        || 1;   // A
-  const colArt    = findHeaderIndexFlexible_(headers, ['Артикул'])        || 2;   // B
-  const colRevsC  = findHeaderIndexFlexible_(headers, ['Отзывы'])         || 3;   // C
-  const colRateD  = findHeaderIndexFlexible_(headers, ['Рейтинг'])        || 4;   // D
-  const colFBO    = findHeaderIndexFlexible_(headers, ['FBO'])            || 6;   // F
-  const colFBS    = findHeaderIndexFlexible_(headers, ['FBS'])            || 7;   // G
-  const colVolI   = findHeaderIndexFlexible_(headers, ['Объем','Объём'])  || 9;   // I
-  const colPriceJ = findHeaderIndexFlexible_(headers, ['Цена'])           || 10;  // J
-  const colOwnCat = findHeaderIndexFlexible_(headers, ['Своя категория']) || 13;  // M
+  // ----- индексы колонок по заголовку (гибко) -----
+  const headers = shS.getRange(1,1,1,lastCol).getValues()[0];
 
-  const vals = shS.getRange(2,1,lastRow-1,13).getValues(); // RAW
+  const colCab    = findHeaderIndexFlexible_(headers, ['Кабинет'])        || 1;
+  const colArt    = findHeaderIndexFlexible_(headers, ['Артикул'])        || 2;
+  const colRevsC  = findHeaderIndexFlexible_(headers, ['Отзывы'])         || 0;
+  const colRateD  = findHeaderIndexFlexible_(headers, ['Рейтинг'])        || 0;
+  const colFBO    = findHeaderIndexFlexible_(headers, ['FBO'])            || 0;
+  const colFBS    = findHeaderIndexFlexible_(headers, ['FBS'])            || 0;
+  const colVolI   = findHeaderIndexFlexible_(headers, ['Объем','Объём'])  || 0;
+  const colPriceJ = findHeaderIndexFlexible_(headers, ['Цена'])           || 0;
+  const colOwnCat = findHeaderIndexFlexible_(headers, ['Своя категория']) || 0; // может уехать вправо из-за «Баркод»
+
+  // максимум нужной ширины для чтения данных
+  const maxIdx = Math.max(colCab, colArt, colRevsC, colRateD, colFBO, colFBS, colVolI, colPriceJ, colOwnCat);
+  if (maxIdx < 2) return emptyCalcRows_();
+
+  const vals = shS.getRange(2,1,lastRow-1,maxIdx).getValues(); // RAW до нужной ширины
 
   // ----- фильтр по кабинету -----
   const filtered = [];
@@ -506,9 +511,9 @@ function collectRowsForCalculator_(cabinet, ctx) {
   for (let i=0;i<filtered.length;i++){
     const row  = filtered[i];
     const art  = String(row[colArt   -1] || '').trim();
-    const rate = REF.toNumber(row[colRateD -1]);
-    const revs = REF.toNumber(row[colRevsC -1]);
-    const own  = String(row[colOwnCat-1] || '').trim();
+    const rate = colRateD ? REF.toNumber(row[colRateD -1]) : 0;
+    const revs = colRevsC ? REF.toNumber(row[colRevsC -1]) : 0;
+    const own  = colOwnCat ? String(row[colOwnCat-1] || '').trim() : '';
 
     // суммарно для КАЛЬКУЛЯТОРА
     displayG.push(art);
@@ -552,10 +557,10 @@ function collectRowsForCalculator_(cabinet, ctx) {
 
     // ---- ПАРАЛЛЕЛЬ ----
     parA.push([art]);
-    parB.push([row[colPriceJ-1]]);
-    parC.push([row[colVolI  -1]]);
-    parD.push([row[colFBO   -1]]);
-    parE.push([row[colFBS   -1]]);
+    parB.push([colPriceJ ? filtered[i][colPriceJ-1] : '']);
+    parC.push([colVolI   ? filtered[i][colVolI  -1] : '']);
+    parD.push([colFBO    ? filtered[i][colFBO   -1] : '']);
+    parE.push([colFBS    ? filtered[i][colFBS   -1] : '']);
   }
 
   // Пакет для Параллели в ctx (общий кэш для этого прогона)
@@ -816,7 +821,7 @@ function layoutParallelInline_(cabinetFull, ctx) {
     return;
   }
 
-  // === 2) Fallback: собрать напрямую из артикулов (на всякий случай) ===
+  // === 2) Fallback: собрать напрямую из артикулов (гибкая ширина) ===
   const artsSheetName = (plat === 'WB') ? ARTS_WB : ARTS_OZ;
   const shS = ss.getSheetByName(artsSheetName);
 
@@ -825,17 +830,20 @@ function layoutParallelInline_(cabinetFull, ctx) {
   let A = [], B = [], C = [], D = [], E = [], M = [];
   if (shS) {
     const lastRow = shS.getLastRow();
-    if (lastRow >= 2 && shS.getLastColumn() >= 13) {
-      const hdr = shS.getRange(1,1,1,13).getValues()[0];
-      const cCab = findHeaderIndexFlexible_(hdr, ['Кабинет'])        || 1;  // A
-      const cArt = findHeaderIndexFlexible_(hdr, ['Артикул'])        || 2;  // B
-      const cFBO = findHeaderIndexFlexible_(hdr, ['FBO'])            || 6;  // F
-      const cFBS = findHeaderIndexFlexible_(hdr, ['FBS'])            || 7;  // G
-      const cVol = findHeaderIndexFlexible_(hdr, ['Объем','Объём'])  || 9;  // I
-      const cPr  = findHeaderIndexFlexible_(hdr, ['Цена'])           || 10; // J
-      const cOwn = findHeaderIndexFlexible_(hdr, ['Своя категория']) || 13; // M
+    const lastCol = shS.getLastColumn();
+    if (lastRow >= 2 && lastCol >= 2) {
+      const hdr = shS.getRange(1,1,1,lastCol).getValues()[0];
 
-      const vals = shS.getRange(2,1,lastRow-1,13).getValues();
+      const cCab = findHeaderIndexFlexible_(hdr, ['Кабинет'])        || 1;
+      const cArt = findHeaderIndexFlexible_(hdr, ['Артикул'])        || 2;
+      const cFBO = findHeaderIndexFlexible_(hdr, ['FBO'])            || 0;
+      const cFBS = findHeaderIndexFlexible_(hdr, ['FBS'])            || 0;
+      const cVol = findHeaderIndexFlexible_(hdr, ['Объем','Объём'])  || 0;
+      const cPr  = findHeaderIndexFlexible_(hdr, ['Цена'])           || 0;
+      const cOwn = findHeaderIndexFlexible_(hdr, ['Своя категория']) || 0;
+
+      const maxIdx = Math.max(cCab, cArt, cFBO, cFBS, cVol, cPr, cOwn);
+      const vals = shS.getRange(2,1,lastRow-1, maxIdx).getValues();
 
       const rows = [];
       for (let i=0;i<vals.length;i++){
@@ -859,13 +867,13 @@ function layoutParallelInline_(cabinetFull, ctx) {
       for (let i=0;i<n;i++){
         const r   = rows[i];
         const art = String(r[cArt-1]||'').trim();
-        const own = String(r[cOwn-1]||'').trim();
+        const own = cOwn ? String(r[cOwn-1]||'').trim() : '';
 
         A[i] = [art];
-        B[i] = [r[cPr -1]];
-        C[i] = [r[cVol-1]];
-        D[i] = [r[cFBO-1]];
-        E[i] = [r[cFBS-1]];
+        B[i] = [cPr  ? r[cPr -1] : ''];
+        C[i] = [cVol ? r[cVol-1] : ''];
+        D[i] = [cFBO ? r[cFBO-1] : ''];
+        E[i] = [cFBS ? r[cFBS-1] : ''];
 
         let cc = 0;
         try { cc = REF.resolveCCForArticle ? REF.resolveCCForArticle(plat, art, own, ssAJ) : 0; }
@@ -1107,12 +1115,12 @@ function computeMaxCabinetArticles_(plat) {
   const lastCol = sh.getLastColumn();
   if (lastRow < 2 || lastCol < 2) return 0;
 
-  // Читаем A:B (Кабинет, Артикул) разом
-  const rng = sh.getRange(2, 1, lastRow - 1, Math.min(13, lastCol));
+  // Читаем только A:B (Кабинет, Артикул) — этого достаточно
+  const rng = sh.getRange(2, 1, lastRow - 1, Math.min(2, lastCol));
   const vals = rng.getValues();
 
   // Узнаём индексы колонок (на случай переименований)
-  const hdr = sh.getRange(1,1,1,Math.min(13,lastCol)).getValues()[0];
+  const hdr = sh.getRange(1,1,1,lastCol).getValues()[0];
   const cCab = findHeaderIndexFlexible_(hdr, ['Кабинет']) || 1; // A
   const cArt = findHeaderIndexFlexible_(hdr, ['Артикул']) || 2; // B
 

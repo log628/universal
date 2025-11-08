@@ -11,7 +11,50 @@ function getREFRESH_WB() {
 
   var DST_SHEET   = REF.SHEETS.ARTS_WB;
   var PARAM_SHEET = REF.SHEETS.PARAMS;
-  var HEADERS     = REF.getArtsHeaders('WB');
+
+  // Базовые заголовки с возможной вставкой "Баркод" ПОСЛЕ nmID (SKU)
+  var BASE_HEADERS = REF.getArtsHeaders('WB') || [];
+  var HEADERS = (function ensureBarcodeHeaderAfterSKU_(arr) {
+    // Ожидаем схему:
+    // A [WB] Кабинет
+    // B Артикул
+    // C Отзывы
+    // D Рейтинг
+    // E Категория
+    // F FBO
+    // G FBS
+    // H RFBS
+    // I Объем
+    // J Цена
+    // K nmID (SKU)
+    // L Баркод  <-- добавляем сюда
+    // M Раздел
+    // N Своя категория
+    var out = arr.slice();
+    var idxSku = out.findIndex(function(h){
+      var s = String(h||'').toLowerCase();
+      return s.includes('nmid') || s.includes('sku');
+    });
+    if (idxSku >= 0) {
+      // если уже есть "Баркод" сразу после SKU — не трогаем
+      var hasBarcode = out.some(function(h){ return String(h||'').toLowerCase().indexOf('баркод')>=0 || String(h||'').toLowerCase().indexOf('barcode')>=0 || String(h||'').toLowerCase().indexOf('штрих')>=0; });
+      if (!hasBarcode) {
+        out.splice(idxSku + 1, 0, 'Баркод');
+      } else {
+        // убеждаемся, что он именно после SKU — если нет, переместим
+        var idxBarcode = out.findIndex(function(h){ var s=String(h||'').toLowerCase(); return s.indexOf('баркод')>=0||s.indexOf('barcode')>=0||s.indexOf('штрих')>=0; });
+        if (idxBarcode !== idxSku + 1 && idxBarcode >= 0) {
+          var [bc] = out.splice(idxBarcode, 1);
+          out.splice(idxSku + 1, 0, bc);
+        }
+      }
+    } else {
+      // на всякий случай: если не нашли SKU — добавим в конец, чтобы не падать
+      if (!out.some(h => String(h||'').toLowerCase().indexOf('баркод')>=0)) out.push('Баркод');
+    }
+    return out;
+  })(BASE_HEADERS);
+
   var TOTAL_COLS  = HEADERS.length;
 
   // ===== 1) Префиксы «Раздел» и «Своя категория» (P:Q)
@@ -96,6 +139,31 @@ function getREFRESH_WB() {
     throw new Error('Кабинет «' + cabName + '»: ни один токен не сработал для ' + tag + '. Errs: ' + errs.join(' | '));
   }
 
+  function pickBarcode_(card) {
+    try {
+      var sizes = card && card.sizes;
+      if (!Array.isArray(sizes)) return '';
+      // нормальный кейс WB: массив строк
+      for (var i = 0; i < sizes.length; i++) {
+        var skus = sizes[i] && sizes[i].skus;
+        if (Array.isArray(skus)) {
+          for (var j = 0; j < skus.length; j++) {
+            var s = skus[j];
+            if (s == null) continue;
+            s = String(s).trim();
+            if (s) return s;
+          }
+        }
+      }
+      // редкие поля
+      for (var k = 0; k < sizes.length; k++) {
+        var bc = sizes[k] && (sizes[k].barcode || sizes[k].barCode || sizes[k].wbBarcode || sizes[k].gtin);
+        if (bc) return String(bc).trim();
+      }
+    } catch (_) {}
+    return '';
+  }
+
   function buildRowsForCabinet(cabName) {
     ss.toast('Запрос данных кабинета ' + cabName, 'Выполнение', 3);
 
@@ -112,7 +180,7 @@ function getREFRESH_WB() {
       pricesDict = list.reduce(function (acc, it) { acc[it.nmID] = it; return acc; }, {});
     } catch (e) { pricesDict = {}; log('WARN getPrices', cabName + ': ' + ((e && e.message) || e)); }
 
-    // 3) Комиссии (перекладка полей согласно новым названиям)
+    // 3) Комиссии
     var commissionsDict = {};
     try {
       var report = withToken_(cabName, 'stats', function (api) {
@@ -154,15 +222,18 @@ function getREFRESH_WB() {
       var price = (function (priceObj) {
         try {
           var p = priceObj && Array.isArray(priceObj.sizes) && priceObj.sizes[0] ? priceObj.sizes[0] : null;
-        var v = (p && (p.price || p.clubDiscountedPrice || p.discountedPrice || p.basicSalePrice || p.basicPrice)) || '';
+          var v = (p && (p.price || p.clubDiscountedPrice || p.discountedPrice || p.basicSalePrice || p.basicPrice)) || '';
           return (v === '' ? '' : String(v).replace('.', ','));
         } catch(_) { return ''; }
       })(pricesDict[nmID]);
+
+      var barcode = pickBarcode_(c);
 
       drafts.push({
         cabName: cabName,
         vendor: vendor,
         nm: nmID,
+        barcode: barcode,
         subjectId: subjId,
         subjectName: subjNm,
         vol: vol,
@@ -191,7 +262,7 @@ function getREFRESH_WB() {
       }
     }
 
-    // 6) Финальные строки
+    // 6) Финальные строки (с Баркодом ПОСЛЕ nmID)
     var rows = [];
     for (var d = 0; d < drafts.length; d++) {
       var rec = drafts[d];
@@ -199,7 +270,10 @@ function getREFRESH_WB() {
       var rating   = (r.reviewRating != null ? r.reviewRating : (r.rating != null ? r.rating : '')) || '';
       var feedback = (r.feedbacks != null ? r.feedbacks : (r.feedbackCount != null ? r.feedbackCount : '')) || '';
       var cm = (rec.subjectId != null) ? (commissionsDict[String(rec.subjectId)] || {}) : {};
-      rows.push([
+
+      // Собираем в соответствии с HEADERS:
+      // ... до J (Цена) включительно:
+      var row = [
         rec.cabName,             // A
         rec.vendor,              // B
         (feedback || '0'),       // C
@@ -210,10 +284,24 @@ function getREFRESH_WB() {
         (cm.RFBS == null ? '' : cm.RFBS),  // H
         rec.vol,                 // I
         rec.price,               // J
-        rec.nm,                  // K
-        rec.section,             // L
-        rec.ownCat               // M
-      ]);
+        rec.nm                   // K (SKU/nmID)
+      ];
+
+      // L = Баркод
+      row.push(rec.barcode || '');
+
+      // M.. = Раздел, Своя категория
+      row.push(rec.section);
+      row.push(rec.ownCat);
+
+      // На случай, если твой HEADERS имеет другой порядок/состав — выровняем длину:
+      if (row.length < TOTAL_COLS) {
+        while (row.length < TOTAL_COLS) row.push('');
+      } else if (row.length > TOTAL_COLS) {
+        row = row.slice(0, TOTAL_COLS);
+      }
+
+      rows.push(row);
     }
     return rows;
   }
@@ -273,14 +361,16 @@ function getREFRESH_WB() {
   }
 
   function paintHeaderBlocks_WB_(sh, HEADERS_) {
+    // Перекрас с учётом 14 столбцов
     sh.getRange(1,  1, 1, 2).setBackground('#434343'); // A:B
     sh.getRange(1,  3, 1, 2).setBackground('#1c4587'); // C:D
     sh.getRange(1,  5, 1, 1).setBackground('#274e13'); // E
     sh.getRange(1,  6, 1, 3).setBackground('#6aa84f'); // F:H
     sh.getRange(1,  9, 1, 1).setBackground('#7f6000'); // I
     sh.getRange(1, 10, 1, 1).setBackground('#990000'); // J
-    sh.getRange(1, 11, 1, 1).setBackground('#333333'); // K
-    sh.getRange(1, 12, 1, 2).setBackground('#5b0f00'); // L:M
+    sh.getRange(1, 11, 1, 1).setBackground('#333333'); // K (nmID)
+    sh.getRange(1, 12, 1, 1).setBackground('#333333'); // L (Баркод) — тот же блок, что и nmID
+    sh.getRange(1, 13, 1, 2).setBackground('#5b0f00'); // M:N
 
     try {
       var a1Text = HEADERS_[0]; // "[ WB ] Кабинет"
@@ -349,6 +439,8 @@ function getREFRESH_WB() {
     return { list: list, total: total };
   }
 }
+
+
 
 
 

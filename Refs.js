@@ -56,18 +56,17 @@
     return null;
   };
 
-REF.getCurrentPlatform = function () {
-  try {
-    var ss = SpreadsheetApp.getActive();
-    var r = ss.getRangeByName(REF.NAMED.MP_CTRL);
-    var raw = r ? String(r.getDisplayValue() || '').trim() : '';
-    var canon = REF.platformCanon(raw);
-    return (canon === 'OZ' || canon === 'WB') ? canon : null;
-  } catch (_) {
-    return null;
-  }
-};
-
+  REF.getCurrentPlatform = function () {
+    try {
+      var ss = SpreadsheetApp.getActive();
+      var r = ss.getRangeByName(REF.NAMED.MP_CTRL);
+      var raw = r ? String(r.getDisplayValue() || '').trim() : '';
+      var canon = REF.platformCanon(raw);
+      return (canon === 'OZ' || canon === 'WB') ? canon : null;
+    } catch (_) {
+      return null;
+    }
+  };
 
   REF.normCabinet = function (s) {
     return String(s == null ? '' : s)
@@ -136,7 +135,7 @@ REF.getCurrentPlatform = function () {
         var disp = shortMap.get(full) || arr[k];
         if (!seen.has(disp)) { seen.add(disp); out.push(disp); }
       }
-      sh.getRange(row,20).setValue(stamp);      // T
+      sh.getRange(row,20).setValue(stamp);          // T
       sh.getRange(row,21).setValue(out.join(', ')); // U
     } catch(_){}
   };
@@ -151,100 +150,90 @@ REF.getCurrentPlatform = function () {
   REF.makeSSKey = function (cabinet, art) {
     return String(cabinet||'').trim() + '␟' + String(art||'').trim();
   };
-REF.readSS_AJ_Map = function() {
-  var ss = SpreadsheetApp.getActive();
-  var sh = ss.getSheetByName(REF.SHEETS.SS);
-  var map = new Map();
-  if (!sh) return map;
 
-  var last = sh.getLastRow();
-  var lastC = sh.getLastColumn();
-  if (last < 2 || lastC < 2) return map;
+  REF.readSS_AJ_Map = function() {
+    var ss = SpreadsheetApp.getActive();
+    var sh = ss.getSheetByName(REF.SHEETS.SS);
+    var map = new Map();
+    if (!sh) return map;
 
-  var hdr = sh.getRange(1,1,1,Math.min(10,lastC)).getDisplayValues()[0]
+    var last = sh.getLastRow();
+    var lastC = sh.getLastColumn();
+    if (last < 2 || lastC < 2) return map;
+
+    var hdr = sh.getRange(1,1,1,Math.min(10,lastC)).getDisplayValues()[0]
               .map(function(x){ return String(x||'').trim().toLowerCase(); });
 
-  function find(nameArr){
-    for (var i=0;i<hdr.length;i++) if (nameArr.indexOf(hdr[i])!==-1) return i+1;
-    return 0;
-  }
-
-function findStartsWith(prefixArr){
-  prefixArr = (prefixArr||[]).map(function(s){ return String(s||'').toLowerCase(); });
-  for (var i=0;i<hdr.length;i++){
-    var h = hdr[i];
-    for (var j=0;j<prefixArr.length;j++){
-      // startsWith без ES6
-      if (h.lastIndexOf(prefixArr[j], 0) === 0) return i + 1;
+    function find(nameArr){
+      for (var i=0;i<hdr.length;i++) if (nameArr.indexOf(hdr[i])!==-1) return i+1;
+      return 0;
     }
-  }
-  return 0;
-}
 
-
-
-
-
-
-  var iT   = find(['товар']);
-  var iCC  = find(['cc+упак+дост','сс+упак+дост','cc+упак+дост.']);
-var iNal = findStartsWith(['наличие']);   // опционально, "Наличие", "Наличие, шт", "Наличие (склад)" и т.п.
-  var iPut = find(['в пути']);    // опционально
-  // «В поставке» намеренно не ищем
-
-  // Минимальный набор — Товар + СС
-  if (!iT || !iCC) return map;
-
-  var vals = sh.getRange(2,1,last-1,Math.min(10,lastC)).getDisplayValues();
-
-  for (var r=0; r<vals.length; r++){
-    var row = vals[r];
-    var key = String(row[iT-1]||'').trim();
-    if (!key) continue;
-
-    var cc  = REF.toNumber(row[iCC-1]);
-    var nal = iNal ? REF.toNumber(row[iNal-1]) : 0;
-    var vput= iPut ? REF.toNumber(row[iPut-1]) : 0;
-
-    map.set(key, {
-      cc:    (isFinite(cc)   ? cc   : 0),
-      nal:   (isFinite(nal)  ? nal  : 0),
-      vput:  (isFinite(vput) ? vput : 0),
-      vpost: 0 // больше не используем
-    });
-  }
-  return map;
-};
-
-REF.readSimkaBase = function () {
-  var ss = SpreadsheetApp.getActive();
-  var sh = ss.getSheetByName(REF.SHEETS.SS);
-  if (!sh) return 0;
-  var last = sh.getLastRow(); if (last < 2) return 0;
-
-  // Универсальный сканер пары столбцов: labels@colA, values@colB
-  function scan(colA, colB) {
-    var labels = sh.getRange(2, colA, last - 1, 1).getDisplayValues();
-    var vals   = sh.getRange(2, colB, last - 1, 1).getDisplayValues();
-    for (var i = 0; i < labels.length; i++) {
-      var lab = String(labels[i][0] || '').trim().toLowerCase();
-      if (!lab) continue;
-      if (lab === 'симка' || lab.indexOf('симка') > -1) {
-        var num = REF.toNumber(vals[i][0]);
-        return (isFinite(num) && num > 0) ? num : 0;
+    function findStartsWith(prefixArr){
+      prefixArr = (prefixArr||[]).map(function(s){ return String(s||'').toLowerCase(); });
+      for (var i=0;i<hdr.length;i++){
+        var h = hdr[i];
+        for (var j=0;j<prefixArr.length;j++){
+          if (h.lastIndexOf(prefixArr[j], 0) === 0) return i + 1; // startsWith
+        }
       }
+      return 0;
     }
-    return 0;
-  }
 
-  // Основной источник теперь N:O (N=14, O=15)
-  var base = scan(14, 15);
-  if (base > 0) return base;
+    var iT   = find(['товар']);
+    var iCC  = find(['cc+упак+дост','сс+упак+дост','cc+упак+дост.']);
+    var iNal = findStartsWith(['наличие']);   // опционально
+    var iPut = find(['в пути']);              // опционально
 
-  // Бэкап на случай старых таблиц: L:M (L=12, M=13)
-  var legacy = scan(12, 13);
-  return legacy > 0 ? legacy : 0;
-};
+    if (!iT || !iCC) return map;
+
+    var vals = sh.getRange(2,1,last-1,Math.min(10,lastC)).getDisplayValues();
+
+    for (var r=0; r<vals.length; r++){
+      var row = vals[r];
+      var key = String(row[iT-1]||'').trim();
+      if (!key) continue;
+
+      var cc  = REF.toNumber(row[iCC-1]);
+      var nal = iNal ? REF.toNumber(row[iNal-1]) : 0;
+      var vput= iPut ? REF.toNumber(row[iPut-1]) : 0;
+
+      map.set(key, {
+        cc:    (isFinite(cc)   ? cc   : 0),
+        nal:   (isFinite(nal)  ? nal  : 0),
+        vput:  (isFinite(vput) ? vput : 0),
+        vpost: 0
+      });
+    }
+    return map;
+  };
+
+  REF.readSimkaBase = function () {
+    var ss = SpreadsheetApp.getActive();
+    var sh = ss.getSheetByName(REF.SHEETS.SS);
+    if (!sh) return 0;
+    var last = sh.getLastRow(); if (last < 2) return 0;
+
+    function scan(colA, colB) {
+      var labels = sh.getRange(2, colA, last - 1, 1).getDisplayValues();
+      var vals   = sh.getRange(2, colB, last - 1, 1).getDisplayValues();
+      for (var i = 0; i < labels.length; i++) {
+        var lab = String(labels[i][0] || '').trim().toLowerCase();
+        if (!lab) continue;
+        if (lab === 'симка' || lab.indexOf('симка') > -1) {
+          var num = REF.toNumber(vals[i][0]);
+          return (isFinite(num) && num > 0) ? num : 0;
+        }
+      }
+      return 0;
+    }
+
+    var base = scan(14, 15); // N:O
+    if (base > 0) return base;
+
+    var legacy = scan(12, 13); // L:M
+    return legacy > 0 ? legacy : 0;
+  };
 
   REF.isSimCardsCategory = function (ownCategory) {
     var s = String(ownCategory||'').replace(/\s+/g,' ').trim().toLowerCase();
@@ -266,7 +255,7 @@ REF.readSimkaBase = function () {
     return 0;
   };
 
-  /* ========= Тарифы (если где-то понадобятся) ========= */
+  /* ========= Тарифы ========= */
   REF.readTariffPercent = function (label) {
     var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(REF.SHEETS.RATES);
     if (!sh) return 0; var last = sh.getLastRow(); if (last<2) return 0;
@@ -280,9 +269,10 @@ REF.readSimkaBase = function () {
   };
 
   /* ========= Заголовки [OZ]/[WB] Артикулы ========= */
+  // Добавлен «Баркод» СРАЗУ ПОСЛЕ «SKU»
   REF.ARTS_HEADERS_BASE = [
     'Кабинет','Артикул','Отзывы','Рейтинг','Категория',
-    'FBO','FBS','RFBS','Объем','Цена','SKU','Раздел','Своя категория'
+    'FBO','FBS','RFBS','Объем','Цена','SKU','Баркод','Раздел','Своя категория'
   ];
   REF.getArtsHeaders = function (tag /* 'OZ'|'WB' */) {
     var hdr = REF.ARTS_HEADERS_BASE.slice();
@@ -290,9 +280,9 @@ REF.readSimkaBase = function () {
     if (t) hdr[0] = '[ ' + t + ' ] Кабинет';
     return hdr;
   };
-  REF.ARTS_COLS = { A:1,B:2,C:3,D:4,E:5,F:6,G:7,H:8,I:9,J:10,K:11,L:12,M:13 };
-  REF.ARTS_TOTAL_COLS = 13;
-
+  // Обновлённые индексы колонок A..N (14 столбцов)
+  REF.ARTS_COLS = { A:1,B:2,C:3,D:4,E:5,F:6,G:7,H:8,I:9,J:10,K:11,L:12,M:13,N:14 };
+  REF.ARTS_TOTAL_COLS = 14;
 
   /* ========= Заголовки [OZ]/[WB] Физ. оборот ========= */
   REF.FIZ_HEADERS_BASE = [
@@ -311,16 +301,7 @@ REF.readSimkaBase = function () {
   REF.FIZ_COLS = { A:1,B:2,C:3,D:4 };
   REF.FIZ_TOTAL_COLS = 4;
 
-
-
-
-
-
-
-
-
-  /* ========= Цвета кабинетов (по ЗАЛИВКЕ) =========
-     platformTag: 'OZON'|'OZ'|'WILDBERRIES'|'WB'|null */
+  /* ========= Цвета кабинетов ========= */
   REF.readCabinetColorMap = function(platformTag) {
     var ss = SpreadsheetApp.getActive();
     var sh = ss.getSheetByName(REF.SHEETS.PARAMS);
@@ -335,11 +316,11 @@ REF.readSimkaBase = function () {
     var iPlat  = idx(['мп','площадка','маркетплейс','platform']) || 4; // D
     var iColor = idx(['цвет_3','цвет','color']) || 7; // G — ЗАЛИВКА
 
-    var A = sh.getRange(2,iCab,  last-1,1).getDisplayValues(); // имена
-    var D = sh.getRange(2,iPlat, last-1,1).getDisplayValues(); // площадка
-    var G = sh.getRange(2,iColor,last-1,1).getBackgrounds();   // HEX из заливки
+    var A = sh.getRange(2,iCab,  last-1,1).getDisplayValues();
+    var D = sh.getRange(2,iPlat, last-1,1).getDisplayValues();
+    var G = sh.getRange(2,iColor,last-1,1).getBackgrounds();
 
-    var want = REF.platformCanon(platformTag); // 'OZ'|'WB'|null
+    var want = REF.platformCanon(platformTag);
     for (var r=0;r<A.length;r++){
       var cab  = String(A[r][0]||'').trim(); if (!cab) continue;
       var plat = REF.platformCanon(D[r][0]);
@@ -347,7 +328,7 @@ REF.readSimkaBase = function () {
       var hex  = String(G[r][0]||'').trim() || '#ffffff';
       if (!/^#?[0-9a-f]{6}$/i.test(hex)) hex = '#ffffff';
       if (hex[0] !== '#') hex = '#' + hex;
-      if (hex.toLowerCase() === '#ffffff') continue; // белое — игнор
+      if (hex.toLowerCase() === '#ffffff') continue;
       map.set(cab, hex);
     }
     return map;
@@ -359,11 +340,7 @@ REF.readSimkaBase = function () {
   REF.PARAMS.SCHEMA = { CAB:1, ID:2, KEY:3, MP:4, SHORT:5, TAX:6, COLOR:7, PICK:8 };
   REF.PARAMS.MP     = { OZON:'OZON', WB:'WILDBERRIES' };
 
-  /** Карта токенов WB из A:H.
-   * B «ID кабинета» — роли токена через запятую (например: "Контент, Статистика, Аналитика, Цены и скидки, Поставки")
-   * C «API KEY»     — сам токен.
-   * Возвращает Map(cabName -> {prices:[], content:[], stats:[], supplies:[], any:[]})
-   */
+  /** Карта токенов WB */
   REF.buildWBTokenMapFromParams = function () {
     var ss = SpreadsheetApp.getActive();
     var sh = ss.getSheetByName(REF.PARAMS.SHEET);
@@ -388,8 +365,8 @@ REF.readSimkaBase = function () {
     }
     for (var i=0;i<vals.length;i++){
       var cab = String(vals[i][S.CAB-1]||'').trim();
-      var id  = String(vals[i][S.ID -1]||'').trim(); // роли
-      var key = String(vals[i][S.KEY-1]||'').trim(); // токен
+      var id  = String(vals[i][S.ID -1]||'').trim();
+      var key = String(vals[i][S.KEY-1]||'').trim();
       var mp  = String(vals[i][S.MP -1]||'').trim().toUpperCase();
       if (!cab || !key) continue;
       if (mp !== REF.PARAMS.MP.WB) continue;
@@ -401,47 +378,32 @@ REF.readSimkaBase = function () {
     return out;
   };
 
+  /** Подбор токена WB по кабинету с доступом к "Цены и скидки" */
+  REF.pickWBToken = function (cabinet, opts) {
+    opts = opts || {};
+    var ss = SpreadsheetApp.getActive();
+    var sh = ss.getSheetByName(REF.PARAMS.SHEET);
+    if (!sh) return null;
 
-/** Подбор токена WB по кабинету с доступом к "Цены и скидки".
- *  - Читает «⚙️ Параметры» A:H
- *  - Фильтр: D = Wildberries (любой регистр/вариант), A = cabinet
- *  - В B: роли через запятую, берём токен из C, если B содержит "цен" или "скид"
- *  - Порядок перечисления ролей не важен.
- *  - Возвращает первый подходящий токен, иначе null.
- */
-REF.pickWBToken = function (cabinet, opts) {
-  opts = opts || {};
-  var ss = SpreadsheetApp.getActive();
-  var sh = ss.getSheetByName(REF.PARAMS.SHEET);
-  if (!sh) return null;
+    var last = sh.getLastRow();
+    if (last < 2) return null;
 
-  var last = sh.getLastRow();
-  if (last < 2) return null;
+    var S = REF.PARAMS.SCHEMA;
+    var vals = sh.getRange(2, 1, last - 1, S.PICK).getDisplayValues(); // A:H
+    var wantCab = REF.normCabinet(cabinet);
 
-  var S = REF.PARAMS.SCHEMA; // { CAB:1, ID:2, KEY:3, MP:4, SHORT:5, TAX:6, COLOR:7, PICK:8 }
-  var vals = sh.getRange(2, 1, last - 1, S.PICK).getDisplayValues(); // A:H (display)
-  var wantCab = REF.normCabinet(cabinet);
+    var chosen = null;
+    for (var i = 0; i < vals.length; i++) {
+      var cab  = REF.normCabinet(vals[i][S.CAB - 1] || '');
+      var roles= String(vals[i][S.ID  - 1] || '');
+      var key  = String(vals[i][S.KEY - 1] || '').trim();
+      var mp   = REF.platformCanon(vals[i][S.MP  - 1] || '');
 
-  var chosen = null;
-  for (var i = 0; i < vals.length; i++) {
-    var cab  = REF.normCabinet(vals[i][S.CAB - 1] || '');
-    var roles= String(vals[i][S.ID  - 1] || '');
-    var key  = String(vals[i][S.KEY - 1] || '').trim();
-    var mp   = REF.platformCanon(vals[i][S.MP  - 1] || '');
-
-    if (!key || cab !== wantCab || mp !== 'WB') continue;
-
-    // Роли устойчиво парсим по вхождению "цен" или "скид" (без привязки к порядку слов)
-    if (/цен|скид/i.test(roles)) {
-      chosen = key;
-      break; // берём первый подходящий
+      if (!key || cab !== wantCab || mp !== 'WB') continue;
+      if (/цен|скид/i.test(roles)) { chosen = key; break; }
     }
-  }
-  return chosen;
-};
-
-
-
+    return chosen;
+  };
 
   /** Отмеченные кабинеты по платформе (H=TRUE) */
   REF.readSelectedCabinets = function (mpTag /* 'OZON'|'WILDBERRIES' */) {

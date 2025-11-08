@@ -37,31 +37,13 @@ function sendPricesFromCalculatorFast() {
     if (!cabinet) throw new Error('Не выбран кабинет (именованный muff_cabs)');
     log('cabinet detect', cabinet);
 
-    // === Текущий режим «Ключи»
-    var mode = (function getMode() {
-      var lastRow = shPar.getLastRow(), lastCol = shPar.getLastColumn();
-      if (lastRow < 2 || lastCol < 11) return 'Артикулы';
-      var rng = shPar.getRange(1, 11, lastRow, Math.min(2, lastCol - 10)).getDisplayValues(); // K:L
-      var m = 'Артикулы';
-      for (var i = 0; i < rng.length; i++) {
-        var key = String(rng[i][0] || '').trim().toLowerCase();
-        if (key === 'ключи') {
-          var v = String(rng[i][1] || '').trim();
-          m = (v === 'Названия') ? 'Названия' : 'Артикулы';
-          break;
-        }
-      }
-      return m;
-    })();
+    log('START', 'platform=' + PLAT + ', cabinet=' + cabinet + ', mode=Артикулы');
 
-    log('START', 'platform=' + PLAT + ', cabinet=' + cabinet + ', mode=' + mode);
-
-    // === РЕЗОЛВЕР: лист артикулов площадки → словари по кабинету (добавлен nm→vendor)
+    // === РЕЗОЛВЕР: лист артикулов площадки → словари по кабинету (WB: vendorCode→nmID; OZ: offer_id passthrough)
     var resolver = buildIdResolverByPlatformCabinet_(PLAT, cabinet);
     log('resolver built',
-        'byDisplay=' + resolver.byDisplay.size + ', byVendor=' + resolver.byVendor.size +
-        ', byOffer=' + resolver.byOffer.size + ', byNm=' + resolver.byNm.size +
-        (resolver.nmToVendor ? (', nmToVendor=' + resolver.nmToVendor.size) : ''));
+        'byVendor=' + resolver.byVendor.size +
+        ', byNm=' + resolver.byNm.size + ', byOffer=' + resolver.byOffer.size);
 
     // === Собираем G/H до последней непустой G
     var lastCalcRow = shCalc.getLastRow();
@@ -81,25 +63,32 @@ function sendPricesFromCalculatorFast() {
     var stats = { resolved: 0, unresolved: 0, badPrice: 0, emptyKey: 0 };
 
     for (var i = 0; i <= lastIdx; i++) {
-      var keyDisp = String(gVals[i][0] || '').trim();
+      var key = String(gVals[i][0] || '').trim();    // G: «Артикулы»
       var priceRaw = hVals[i][0];
-      if (!keyDisp) { stats.emptyKey++; continue; }
+      if (!key) { stats.emptyKey++; continue; }
 
       var price = Number(priceRaw);
       if (!(isFinite(price) && price > 0)) { stats.badPrice++; continue; }
 
       if (PLAT === 'OZ') {
-        var offerId = resolveOzonOfferId_(keyDisp, mode, resolver);
+        // G = offer_id
+        var offerId = key;
         if (offerId) {
           payloadOZ.push({ offer_id: offerId, price: String(Math.round(price)) });
           stats.resolved++;
         } else {
           stats.unresolved++;
         }
-      } else { // WB
-        var nm = resolveWbNmId_(keyDisp, mode, resolver);
+      } else {
+        // WB: G = vendorCode; резолвим nmID, либо берём G как nmID если так и введено
+        var nm = '';
+        if (resolver.byVendor.has(key)) {
+          nm = resolver.byVendor.get(key);       // vendorCode -> nmID
+        } else if (resolver.byNm.has(key)) {
+          nm = key;                               // допустим G уже nmID
+        }
         if (nm) {
-          payloadWB.push({ nmID: Number(nm), price: Math.round(Number(price)) }); // discount опускаем
+          payloadWB.push({ nmID: Number(nm), price: Math.round(Number(price)) });
           stats.resolved++;
         } else {
           stats.unresolved++;
@@ -199,98 +188,79 @@ function buildIdResolverByPlatformCabinet_(PLAT, cabinet) {
     console.log('[' + ms + ' ms][' + LOG_NS + '] ' + msg + (extra ? ' | ' + extra : ''));
   }
 
+  function norm(s){ return String(s||'').replace(/\[[^\]]*\]/g,'').trim().toLowerCase(); }
+  function findIdx(hdr, variants){
+    var set = (variants||[]).map(norm);
+    for (var i=0;i<hdr.length;i++){
+      var h = norm(hdr[i]);
+      if (set.indexOf(h) !== -1) return i+1; // 1-based
+    }
+    return 0;
+  }
+
   var ss = SpreadsheetApp.getActive();
   var artsSheet = ss.getSheetByName(PLAT === 'WB' ? REF.SHEETS.ARTS_WB : REF.SHEETS.ARTS_OZ);
-  if (!artsSheet) { log('no sheet'); return { byDisplay: new Map(), byVendor: new Map(), byOffer: new Map(), byNm: new Map(), nmToVendor: new Map() }; }
+  if (!artsSheet) {
+    log('no sheet');
+    return { byVendor:new Map(), byNm:new Map(), byOffer:new Map() };
+  }
 
   var lastRow = artsSheet.getLastRow();
-  if (lastRow < 2) { log('no data rows'); return { byDisplay: new Map(), byVendor: new Map(), byOffer: new Map(), byNm: new Map(), nmToVendor: new Map() }; }
+  var lastCol = artsSheet.getLastColumn();
+  if (lastRow < 2 || lastCol < 2) {
+    log('no data rows');
+    return { byVendor:new Map(), byNm:new Map(), byOffer:new Map() };
+  }
 
-  var vals = artsSheet.getRange(2, 1, lastRow - 1, 12).getDisplayValues(); // A:L
-  var byDisplay = new Map();
-  var byVendor  = new Map();
-  var byOffer   = new Map();
-  var byNm      = new Map();
-  var nmToVendor= new Map();
+  // читаем всю строку заголовков как есть
+  var hdr = artsSheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0];
+
+  // базовые индексы
+  var cCab  = findIdx(hdr, ['кабинет']) || 1; // A по умолчанию
+
+  // OZ (только «Артикул» / offer_id)
+  var cOfferOZ = findIdx(hdr, ['offer_id','артикул продавца','артикул']) || 2; // B fallback
+
+  // WB (vendorCode и nmID (в твоей схеме nmID в колонке "SKU"))
+  var cVendorWB = findIdx(hdr, ['артикул продавца','vendorcode','vendor_code']) || 2; // B
+  var cNmWB     = findIdx(hdr, ['nmid','nm id','nm_id','nm','sku']) || 11;            // K/«SKU»
+
+  var needCols = Math.max(cCab, cOfferOZ, cVendorWB, cNmWB);
+  needCols = Math.min(needCols || lastCol, lastCol);
+  var vals = artsSheet.getRange(2, 1, lastRow - 1, needCols).getDisplayValues();
+
+  var byVendor  = new Map(); // WB: vendorCode -> nmID
+  var byNm      = new Map(); // WB: nmID       -> nmID
+  var byOffer   = new Map(); // OZ: offer_id   -> offer_id (на всякий случай)
 
   var rowsSeen = 0;
-  vals.forEach(function (row) {
-    var cab = String(row[0] || '').trim();
-    if (cab !== cabinet) return;
+
+  for (var i=0;i<vals.length;i++){
+    var row = vals[i];
+    var cab = String(row[cCab-1] || '').trim();
+    if (cab !== cabinet) continue;
     rowsSeen++;
 
-    var B = String(row[1] || '').trim();   // OZ: offer_id | WB: vendorCode
-    var K = String(row[10] || '').trim();  // OZ: SKU      | WB: nmID
-    var L = String(row[11] || '').trim();  // Наименование
-
     if (PLAT === 'OZ') {
-      var offer = B;
+      var offer = (cOfferOZ ? String(row[cOfferOZ-1] || '').trim() : '');
       if (offer) byOffer.set(offer, offer);
-      var disp = ((K || offer) ? (K || offer) : '') + (L ? (' | ' + L) : '');
-      disp = disp.trim();
-      if (disp) byDisplay.set(disp, { offer_id: offer });
-      if (offer) byDisplay.set(offer, { offer_id: offer });
-
-    } else { // WB
-      var vendor = B;
-      var nmID   = K;
+    } else {
+      var vendor = (cVendorWB ? String(row[cVendorWB-1] || '').trim() : '');
+      var nmID   = (cNmWB     ? String(row[cNmWB-1]     || '').trim() : '');
       if (vendor && nmID) byVendor.set(vendor, nmID);
-      if (nmID) { byNm.set(nmID, nmID); }
-      if (vendor && nmID) nmToVendor.set(nmID, vendor);
-
-      var dispWB = (nmID ? nmID : '') + (L ? (' | ' + L) : '');
-      dispWB = dispWB.trim();
-      if (dispWB && nmID) byDisplay.set(dispWB, { nmID: nmID });
-      if (vendor && nmID) byDisplay.set(vendor, { nmID: nmID });
-      if (nmID) byDisplay.set(nmID, { nmID: nmID });
+      if (nmID)           byNm.set(nmID, nmID);
     }
-  });
-
-  log('built', 'rowsSeen=' + rowsSeen + ', byDisplay=' + byDisplay.size + ', byVendor=' + byVendor.size + ', byOffer='  + byOffer.size  + ', byNm=' + byNm.size + ', nmToVendor=' + nmToVendor.size);
-
-  return { byDisplay: byDisplay, byVendor: byVendor, byOffer: byOffer, byNm: byNm, nmToVendor: nmToVendor };
-}
-
-function resolveOzonOfferId_(keyDisp, mode, R) {
-  var off = String(keyDisp || '').trim();
-  if (mode === 'Артикулы') {
-    if (off) return off;
   }
-  var rec = R.byDisplay.get(off);
-  if (rec && rec.offer_id) return rec.offer_id;
-  return '';
-}
 
-function resolveWbNmId_(keyDisp, mode, R) {
-  var s = String(keyDisp || '').trim();
-  if (mode === 'Названия') {
-    var rec = R.byDisplay.get(s);
-    if (rec && rec.nmID) return rec.nmID;
-    var left = s.split('|')[0].trim();
-    if (R.byNm.has(left)) return left;
-    return '';
-  } else {
-    if (R.byVendor.has(s)) return R.byVendor.get(s);
-    if (R.byNm.has(s))     return s;
-    return '';
-  }
+  log('built','rowsSeen=' + rowsSeen + ', byVendor=' + byVendor.size + ', byNm=' + byNm.size + ', byOffer=' + byOffer.size);
+
+  return { byVendor: byVendor, byNm: byNm, byOffer: byOffer };
 }
 
 /* =========================================================
  * ======= WB DEBUG + ВЫГРУЗКА ЛОГА В «🛠 Тех. лог» (H) ======
  * ========================================================= */
 
-/**
- * Подробный лог по загрузке цен WB и выгрузка в «🛠 Тех. лог» (с колонки H).
- * — Статусы по uploadID (history/buffer)
- * — Ошибки по товарам
- * — Карантин (GET /quarantine/goods)
- * — Текущие цены/скидки (POST /list/goods/filter)
- * — VendorCode (Артикул продавца)
- * — Сравнение с отправленной ценой: Δ и OK?
- * — Режим ценообразования: product | size
- * — Фиксация блокировок распродажи (Sale / high inventory) и флага isBadTurnover
- */
 function WB_debugPriceUpload_(token, uploadIds, payloadWB, cabinet, opts) {
   var LOG_NS = 'WB_DEBUG';
   function clog(label, extra) { console.log('[' + LOG_NS + '] ' + label + (extra ? ' | ' + extra : '')); }
@@ -316,7 +286,7 @@ function WB_debugPriceUpload_(token, uploadIds, payloadWB, cabinet, opts) {
   var nmMode    = opts.nmMode || {}; // nm -> 'size' | 'product'
   payloadWB.forEach(function(p){ var n = Number(p.nmID); if (n) sentPrice[n] = Number(p.price); });
 
-  // Строки лога по nmID (заполняем постепенно). Сразу создаём записи для ВСЕХ nmID.
+  // Строки лога по nmID
   var recMap = {}; // nmID -> {...}
   function ensureRec(nm, upId, statusStr) {
     if (!recMap[nm]) recMap[nm] = {
@@ -334,7 +304,7 @@ function WB_debugPriceUpload_(token, uploadIds, payloadWB, cabinet, opts) {
     return recMap[nm];
   }
 
-  // Предзаполнение ВСЕХ отправленных nmID
+  // Предзаполнение
   var hasUploads = Array.isArray(uploadIds) && uploadIds.length > 0;
   var preStatus = hasUploads ? 'sent' : 'no_upload (runtime)';
   var preUploadId = hasUploads ? String(uploadIds[0] || '') : '';
@@ -386,7 +356,7 @@ function WB_debugPriceUpload_(token, uploadIds, payloadWB, cabinet, opts) {
         });
       }
 
-      // Обновим общий статус для всех отправленных nmID, если он "сильнее" чем предзаполненный
+      // Обновим общий статус
       allNmIDs.forEach(function(nm){ var R = ensureRec(nm, upId, statusStr || ''); });
     }
   }
@@ -421,12 +391,11 @@ function WB_debugPriceUpload_(token, uploadIds, payloadWB, cabinet, opts) {
         }
       }
 
-      // Итоговый человеко-понятный статус/причина
+      // Итоговый статус/причина
       if (R.error) { R.result = 'error'; R.reason = R.error; }
       else if (R.block) { R.result = 'blocked'; R.reason = R.block; }
       else if (R.quarantine) { R.result = 'blocked'; R.reason = 'quarantine'; }
       else if (R.equal === 'OK') {
-        // отличаем «применилось» от «без изменений»
         if (R.status === 'no_upload (runtime)' || R.status === 'sent') { R.result = 'unchanged'; R.reason = 'same_price'; }
         else { R.result = 'applied'; R.reason = ''; }
       } else {
