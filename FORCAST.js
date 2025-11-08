@@ -124,89 +124,88 @@ function buildForecast_All() {
   // ────────────────────────────────────────────────────────────────────────
   // Ч Т Е Н И Е  «🍔 СС»
   // ────────────────────────────────────────────────────────────────────────
-function readSS_All_(){
-  var s = ss.getSheetByName(SH_SS);
-  var out = {
-    goods: new Map(), // tovar -> { brand, model, ccCur, currency, nal, vput, notBuy }
-    kits:  [],        // [{kit, comp, coef}]
-    rates: new Map(), // norm(currency) -> rate
-    notBuySet: new Set()
-  };
-  if (!s) return out;
-  var lr = s.getLastRow(); if (lr < 2) return out;
+  function readSS_All_(){
+    var s = ss.getSheetByName(SH_SS);
+    var out = {
+      goods: new Map(), // tovar -> { brand, model, ccCur, currency, nal, vput, notBuy }
+      kits:  [],        // [{kit, comp, coef}]
+      rates: new Map(), // norm(currency) -> rate
+      notBuySet: new Set()
+    };
+    if (!s) return out;
+    var lr = s.getLastRow(); if (lr < 2) return out;
 
-  var lc  = s.getLastColumn();
-  var hdr = s.getRange(1,1,1,lc).getDisplayValues()[0];
+    var lc  = s.getLastColumn();
+    var hdr = s.getRange(1,1,1,lc).getDisplayValues()[0];
 
-  // По заголовкам ищем только то, что реально может «гулять»
-  var cTovar = hdrIndex(hdr, 'товар');
-  var cBrand = hdrIndex(hdr, 'производитель');
-  var cModel = hdrIndex(hdr, 'модель');
-  var cCCcur = hdrIndex(hdr, ['cc в валюте', 'сс в валюте']);
-  var cCurr  = hdrIndex(hdr, 'валюта');
-  var cCCUD  = hdrIndex(hdr, ['cc+упак+дост','сс+упак+дост','cc+упак+дост.']);
-  var cOff   = hdrIndex(hdr, 'не закупается'); // «В поставке» не используем
+    // По заголовкам ищем только то, что реально может «гулять»
+    var cTovar = hdrIndex(hdr, 'товар');
+    var cBrand = hdrIndex(hdr, 'производитель');
+    var cModel = hdrIndex(hdr, 'модель');
+    var cCCcur = hdrIndex(hdr, ['cc в валюте', 'сс в валюте']);
+    var cCurr  = hdrIndex(hdr, 'валюта');
+    var cCCUD  = hdrIndex(hdr, ['cc+упак+дост','сс+упак+дост','cc+упак+дост.']);
+    var cOff   = hdrIndex(hdr, 'не закупается'); // «В поставке» не используем
 
-  // Берём минимум A..L, чтобы гарантированно захватить G(H)
-  var readCols = Math.min(lc, Math.max(cTovar,cBrand,cModel,cCCcur,cCurr,cCCUD,cOff, 12));
-  var rowsAJ = s.getRange(2,1,lr-1,readCols).getDisplayValues();
+    // Берём минимум A..L, чтобы гарантированно захватить G(H)
+    var readCols = Math.min(lc, Math.max(cTovar,cBrand,cModel,cCCcur,cCurr,cCCUD,cOff, 12));
+    var rowsAJ = s.getRange(2,1,lr-1,readCols).getDisplayValues();
 
-  for (var i=0;i<rowsAJ.length;i++){
-    var row = rowsAJ[i];
-    var tv = String(row[(cTovar||1)-1]||'').trim(); if (!tv) continue;
+    for (var i=0;i<rowsAJ.length;i++){
+      var row = rowsAJ[i];
+      var tv = String(row[(cTovar||1)-1]||'').trim(); if (!tv) continue;
 
-    var brand = cBrand ? String(row[cBrand-1]||'').trim() : '';
-    var model = cModel ? String(row[cModel-1]||'').trim() : '';
-    var ccCur = cCCcur? num(row[cCCcur-1]) : 0;
-    var curr  = cCurr ? String(row[cCurr-1]||'').trim() : '';
+      var brand = cBrand ? String(row[cBrand-1]||'').trim() : '';
+      var model = cModel ? String(row[cModel-1]||'').trim() : '';
+      var ccCur = cCCcur? num(row[cCCcur-1]) : 0;
+      var curr  = cCurr ? String(row[cCurr-1]||'').trim() : '';
 
-    // ЖЁСТКАЯ привязка:
-    var nal  = num(row[6]); // G
-    var vput = num(row[7]); // H
+      // ЖЁСТКАЯ привязка:
+      var nal  = num(row[6]); // G
+      var vput = num(row[7]); // H
 
-    var notBuy = cOff ? (norm(row[cOff-1]) === 'да') : false;
-    if (notBuy) out.notBuySet.add(tv);
+      var notBuy = cOff ? (norm(row[cOff-1]) === 'да') : false;
+      if (notBuy) out.notBuySet.add(tv);
 
-    out.goods.set(tv, {
-      brand: brand,
-      model: model,
-      ccCur: isFinite(ccCur)?ccCur:0,
-      currency: curr,
-      nal: isFinite(nal)?nal:0,
-      vput: isFinite(vput)?vput:0,
-      notBuy: notBuy
-    });
-  }
-
-  // КУРСЫ: N:O
-  if (lc >= 15){
-    var labels = s.getRange(2,14,lr-1,1).getDisplayValues(); // N
-    var rates  = s.getRange(2,15,lr-1,1).getDisplayValues(); // O
-    for (var r=0;r<labels.length;r++){
-      var name = String(labels[r][0]||'').trim();
-      if (!name) continue;
-      var rate = num(rates[r][0]);
-      out.rates.set(norm(name), isFinite(rate)?rate:0);
+      out.goods.set(tv, {
+        brand: brand,
+        model: model,
+        ccCur: isFinite(ccCur)?ccCur:0,
+        currency: curr,
+        nal: isFinite(nal)?nal:0,
+        vput: isFinite(vput)?vput:0,
+        notBuy: notBuy
+      });
     }
-  }
 
-  // КОМПЛЕКТЫ: Q:R:S
-  if (lc >= 19){
-    var kits = s.getRange(2,17,lr-1,3).getDisplayValues(); // Q:R:S
-    for (var k=0;k<kits.length;k++){
-      var kit  = String(kits[k][0]||'').trim();
-      var comp = String(kits[k][1]||'').trim();
-      var coef = num(kits[k][2]);
-      if (!kit || !comp) continue;
-      var c = isFinite(coef)?coef:0;
-      if (c <= 0) continue;
-      out.kits.push({ kit: kit, comp: comp, coef: c });
+    // КУРСЫ: N:O
+    if (lc >= 15){
+      var labels = s.getRange(2,14,lr-1,1).getDisplayValues(); // N
+      var rates  = s.getRange(2,15,lr-1,1).getDisplayValues(); // O
+      for (var r=0;r<labels.length;r++){
+        var name = String(labels[r][0]||'').trim();
+        if (!name) continue;
+        var rate = num(rates[r][0]);
+        out.rates.set(norm(name), isFinite(rate)?rate:0);
+      }
     }
+
+    // КОМПЛЕКТЫ: Q:R:S
+    if (lc >= 19){
+      var kits = s.getRange(2,17,lr-1,3).getDisplayValues(); // Q:R:S
+      for (var k=0;k<kits.length;k++){
+        var kit  = String(kits[k][0]||'').trim();
+        var comp = String(kits[k][1]||'').trim();
+        var coef = num(kits[k][2]);
+        if (!kit || !comp) continue;
+        var c = isFinite(coef)?coef:0;
+        if (c <= 0) continue;
+        out.kits.push({ kit: kit, comp: comp, coef: c });
+      }
+    }
+
+    return out;
   }
-
-  return out;
-}
-
 
   var SS = readSS_All_();
 
@@ -424,7 +423,7 @@ function readSS_All_(){
 
     for (var i=0;i<listForNR.length;i++){
       var tv = listForNR[i];
-var ssrec = (SS.goods.get(tv) || { nal:0, vput:0 });
+      var ssrec = (SS.goods.get(tv) || { nal:0, vput:0 });
 
       var zRaw = sumNeedByTovar_raw.get(tv) || 0;
       var base;
@@ -444,7 +443,7 @@ var ssrec = (SS.goods.get(tv) || { nal:0, vput:0 });
       else if (base > 0 && plusFromKits <= 0) P_disp = String(base);
       else P_disp = '';
 
-var baseKup = Math.max(0, (P_total + MINIMAL) - (ssrec.nal + ssrec.vput));
+      var baseKup = Math.max(0, (P_total + MINIMAL) - (ssrec.nal + ssrec.vput));
       var kup  = (baseKup < 3) ? 0 : ceilToStep(baseKup, ROUNDSTEP);
 
       rowsNR.push(['  '+tv, kup, P_disp, ssrec.nal||0, ssrec.vput||0]);
@@ -536,6 +535,19 @@ var baseKup = Math.max(0, (P_total + MINIMAL) - (ssrec.nal + ssrec.vput));
       .setBorder(false,false,false,false,false,false,null,null);
   }
 
+  // --- Жёсткая очистка блоков назначения (с 3-й строки) перед рисовкой ---
+  function wipeBlock_(colA, colB) {
+    var startRow = DATA_ROW;
+    var height = Math.max(0, sh.getMaxRows() - startRow + 1);
+    if (height > 0) {
+      sh.getRange(startRow, colA, height, colB - colA + 1).clearContent();
+    }
+  }
+  wipeBlock_(5, 9);   // E:I
+  wipeBlock_(11, 15); // K:O
+  wipeBlock_(17, 23); // Q:W
+  SpreadsheetApp.flush();
+
   // ── Таблица Q:W ─────────────────────────────────────────────────────────
   (function draw_QW(){
     var totalData = Math.max(rowsTZ.length, 0);
@@ -567,6 +579,11 @@ var baseKup = Math.max(0, (P_total + MINIMAL) - (ssrec.nal + ssrec.vput));
 
     // Данные (с 3-й строки)
     if (rowsTZ.length) sh.getRange(DATA_ROW,17,rowsTZ.length,7).setValues(rowsTZ);
+
+    // Дочистить хвост под новой таблицей
+    var tailQW = sh.getMaxRows() - (DATA_ROW + rowsTZ.length) + 1;
+    if (tailQW > 0) sh.getRange(DATA_ROW + rowsTZ.length, 17, tailQW, 7).clearContent();
+
     var totalRows = Math.max(rowsTZ.length, 1);
     sh.getRange(DATA_ROW,17,totalRows,7).setFontFamily('Roboto').setFontSize(10)
       .setHorizontalAlignment('center').setVerticalAlignment('middle');
@@ -658,6 +675,11 @@ var baseKup = Math.max(0, (P_total + MINIMAL) - (ssrec.nal + ssrec.vput));
 
     // Данные
     if (rowsNR.length) sh.getRange(DATA_ROW,11,rowsNR.length,5).setValues(rowsNR);
+
+    // Дочистить хвост под новой таблицей
+    var tailKO = sh.getMaxRows() - (DATA_ROW + rowsNR.length) + 1;
+    if (tailKO > 0) sh.getRange(DATA_ROW + rowsNR.length, 11, tailKO, 5).clearContent();
+
     var totalRows = Math.max(rowsNR.length, 1);
     sh.getRange(DATA_ROW,11,totalRows,5).setFontFamily('Roboto').setFontSize(10)
       .setVerticalAlignment('middle').setHorizontalAlignment('center');
@@ -718,6 +740,11 @@ var baseKup = Math.max(0, (P_total + MINIMAL) - (ssrec.nal + ssrec.vput));
 
     // Данные
     if (rowsFJ.length) sh.getRange(DATA_ROW,5,rowsFJ.length,5).setValues(rowsFJ);
+
+    // Дочистить хвост под новой таблицей
+    var tailEI = sh.getMaxRows() - (DATA_ROW + rowsFJ.length) + 1;
+    if (tailEI > 0) sh.getRange(DATA_ROW + rowsFJ.length, 5, tailEI, 5).clearContent();
+
     var totalRows = Math.max(rowsFJ.length, 1);
     sh.getRange(DATA_ROW,5,totalRows,5).setFontFamily('Roboto').setFontSize(10)
       .setVerticalAlignment('middle');
@@ -770,6 +797,8 @@ var baseKup = Math.max(0, (P_total + MINIMAL) - (ssrec.nal + ssrec.vput));
   sh.setColumnWidth(18, 55);      // R (повторно, на случай внешних правок)
   sh.setColumnWidths(19,2,65);    // S:T
   sh.setColumnWidths(21,2,65);    // U:V
+
+  SpreadsheetApp.flush();
 
   // Без закрепления строк
   try { sh.setFrozenRows(0); } catch(_){}
